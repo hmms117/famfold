@@ -1,0 +1,28 @@
+task: minifold
+
+data:
+  data_dir: ""
+  esm_model_name: esm2_t36_3B_UR50D
+  esm_cache_path: ""
+  batch_size: 4
+  num_workers: 8
+  samples_per_epoch: 1000000
+  max_length: 256
+
+model:
+  esm_model_name: esm2_t36_3B_UR50D
+  num_blocks: 48
+  num_recycling: 3
+  max_dist: 25
+  no_bins: 64
+  compile: true
+  pretrained: ""
+  use_structure_module: true
+
+trainer:
+  accelerator: gpu
+  devices: 8
+  precision: bf16-mixed
+  gradient_clip_val: 1.5
+  val_check_interval: 0.25
+  accumulate_grad_batches: 4
