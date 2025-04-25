@@ -29,6 +29,10 @@ Options are available:
 
 We train the model using AFDB proteins filtered to > 70 global plddt and selected for diversity using uniref30 as initial list, pre-filtering. You may use the provided train.py script and the YAML configs under `configs`.
 
+## Kernels
+
+We developed two triton kernels for this work. You can find them [here](https://github.com/jwohlwend/minifold/tree/main/minifold/model/kernels).
+
 ## Cite
 
 ```
