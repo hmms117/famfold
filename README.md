@@ -1,6 +1,8 @@
-# minifold
+# MiniFold
 
 MiniFold if a fast model for single chain protein structure prediction. Built using the same protein language model as ESMFold, it achieves considerable speedups (up to 10-20x) and memory savings (up to 10x) at little to no cost in performance.
+
+[Paper Link](https://openreview.net/pdf?id=1p9hQTbjgo)
 
 ## Installation
 
