@@ -1,4 +1,3 @@
-
 import torch
 import gc
 
@@ -10,11 +9,17 @@ def clear_gradients(*args):
 
 
 def clear_memory(device):
-    torch._C._cuda_clearCublasWorkspaces()
-    torch._dynamo.reset()
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats(device)
+    if device.type == "cuda":
+        torch._C._cuda_clearCublasWorkspaces()
+        torch._dynamo.reset()
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+    elif device.type == "mps":
+        gc.collect()
+        torch.mps.empty_cache()
+    else:
+        gc.collect()
 
 
 def peak_memory(f, *args, device):
@@ -27,14 +32,25 @@ def peak_memory(f, *args, device):
         f(*args)
 
         # Measure peak memory
-        torch.cuda.synchronize()
-        memory = torch.cuda.max_memory_allocated(device)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+            memory = torch.cuda.max_memory_allocated(device)
+        elif device.type == "mps":
+            torch.mps.synchronize()
+            memory = torch.mps.current_allocated_memory()
+        else:
+            memory = 0
 
     return memory
 
 
 def current_memory(device):
-    return torch.cuda.memory_allocated(device) / (1024**3)
+    if device.type == "cuda":
+        return torch.cuda.memory_allocated(device) / (1024**3)
+    elif device.type == "mps":
+        return torch.mps.current_allocated_memory() / (1024**3)
+    else:
+        return 0
 
 
 def memory_measure(f, device, num_iters=3):
@@ -60,8 +76,14 @@ def memory_measure_simple(f, device, *args, **kwargs):
     out = f(*args, **kwargs)
 
     # Measure peak memory
-    torch.cuda.synchronize()
-    memory = torch.cuda.max_memory_allocated(device)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+        memory = torch.cuda.max_memory_allocated(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+        memory = torch.mps.current_allocated_memory()
+    else:
+        memory = 0
     memory = memory / (1024**3)
     memory = memory - current
 

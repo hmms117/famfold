@@ -149,37 +149,45 @@ def inference_kernel(
 
 
 def mlp_kernel(X, W1, W2, b1, b2, wn, bn):
-    B, N1, N2, C1 = X.shape
-    M = B * N1 * N2
-    C2 = W1.shape[1]
+    if X.device.type == "cuda":
+        B, N1, N2, C1 = X.shape
+        M = B * N1 * N2
+        C2 = W1.shape[1]
 
-    X = X.contiguous()
-    O = torch.empty_like(X)
+        X = X.contiguous()
+        O = torch.empty_like(X)
 
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_C2 = 32
+        BLOCK_SIZE_M = 128
+        BLOCK_SIZE_C2 = 32
 
-    assert M > BLOCK_SIZE_M
-    assert M % BLOCK_SIZE_M == 0
-    assert C1 <= 128
+        assert M > BLOCK_SIZE_M
+        assert M % BLOCK_SIZE_M == 0
+        assert C1 <= 128
 
-    grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M),)
-    inference_kernel[grid](
-        X,
-        W1,
-        W2,
-        b1,
-        b2,
-        wn,
-        bn,
-        O,
-        M,
-        C1,
-        C2,
-        BLOCK_SIZE_M,
-        BLOCK_SIZE_C2,
-    )
-    return O
+        grid = lambda META: (triton.cdiv(M, BLOCK_SIZE_M),)
+        inference_kernel[grid](
+            X,
+            W1,
+            W2,
+            b1,
+            b2,
+            wn,
+            bn,
+            O,
+            M,
+            C1,
+            C2,
+            BLOCK_SIZE_M,
+            BLOCK_SIZE_C2,
+        )
+        return O
+    else:
+        # Use unfused fallback for MPS/CPU
+        x = F.layer_norm(X, X.shape[-1:], weight=wn, bias=bn, eps=1e-5)
+        x = F.linear(x, W1, b1)
+        x.relu_()
+        x = F.linear(x, W2, b2)
+        return x
 
 
 #---------------- TESTS ----------------#
@@ -252,27 +260,30 @@ def check_correctness(f1, f2, device):
     triton.testing.Benchmark(
         x_names=["size"],
         x_vals=[2**i for i in range(5, 13)],
-        line_arg="provider",  # Argument name whose value corresponds to a different line in the plot.
-        line_vals=["triton", "torch-compile", "torch"],  # Possible values for `line_arg`.
-        line_names=["Triton", "Torch-compile", "Torch"],  # Label name for the lines.
-        plot_name="performance",  # Name for the plot. Used also as a file name for saving the plot.
-        args={},  # Values for function arguments not in `x_names` and `y_name`.
+        line_arg="provider",
+        line_vals=["triton", "torch-compile", "torch"],
+        line_names=["Triton", "Torch-compile", "Torch"],
+        plot_name="performance",
+        args={},
     )
 )
-def benchmark(size, provider):
+def benchmark(size, provider, device="cuda"):
     x, W1, W2, b1, b2, wn, bn = create_input(
-        "cuda", dtype=torch.bfloat16, grad=False, size=size
+        device, dtype=torch.bfloat16, grad=False, size=size
     )
 
     if provider == "triton":
-        ms = triton.testing.do_bench(lambda: fused(x, W1, W2, b1, b2, wn, bn))
+        if device == "cuda":
+            ms = triton.testing.do_bench(lambda: fused(x, W1, W2, b1, b2, wn, bn))
+        else:
+            ms = float("nan")
     if provider == "torch":
         W1 = W1.t().contiguous()
-        W2 = W1.t().contiguous()
+        W2 = W2.t().contiguous()
         ms = triton.testing.do_bench(lambda: unfused(x, W1, W2, b1, b2, wn, bn))
     if provider == "torch-compile":
         W1 = W1.t().contiguous()
-        W2 = W1.t().contiguous()
+        W2 = W2.t().contiguous()
         ms = triton.testing.do_bench(lambda: compiled(x, W1, W2, b1, b2, wn, bn))
 
     return ms
@@ -285,86 +296,97 @@ def clear_gradients(*args):
 
 
 def clear_memory(device):
-    torch._C._cuda_clearCublasWorkspaces()
-    torch._dynamo.reset()
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats(device)
+    if device.type == "cuda":
+        torch._C._cuda_clearCublasWorkspaces()
+        torch._dynamo.reset()
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+    elif device.type == "mps":
+        gc.collect()
+        torch.mps.empty_cache()
+    else:
+        gc.collect()
 
 
 def peak_memory(f, *args, device=None):
     for _ in range(10):
-        # Clean everything
         clear_memory(device)
         clear_gradients(*args)
-
-        # Run once
         f(*args)
-
-        # Measure peak memory
-        torch.cuda.synchronize()
-        memory = torch.cuda.max_memory_allocated(device)
-
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+            memory = torch.cuda.max_memory_allocated(device)
+        elif device.type == "mps":
+            torch.mps.synchronize()
+            memory = torch.mps.current_allocated_memory()
+        else:
+            memory = 0
     return memory
 
 
 def memory_triton(f, device=None):
-    # Clean everything
     clear_memory(device)
-
-    # Initialize inputs
     x, W1, W2, b1, b2, wn, bn = create_input(device, dtype=torch.bfloat16, grad=False)
-
-    # Run measurement
-    print("Current memory: ", torch.cuda.memory_allocated(device) / (1024**3))
+    if device.type == "cuda":
+        print("Current memory: ", torch.cuda.memory_allocated(device) / (1024**3))
+    elif device.type == "mps":
+        print("Current memory: ", torch.mps.current_allocated_memory() / (1024**3))
+    else:
+        print("Current memory: 0")
     memory = peak_memory(f, x, W1, W2, b1, b2, wn, bn, device=device)
-
     print("Peak memory: ", memory / (1024**3))
     return memory
 
 
 def memory_baseline(f, device=None):
-    # Clean everything
     clear_memory(device)
-
-    # Initialize inputs
     x, W1, W2, b1, b2, wn, bn = create_input(device, dtype=torch.bfloat16, grad=False)
-
     W1 = W1.t().contiguous()
-    W2 = W1.t().contiguous()
-
-    # Run measurement
-    print("Current memory: ", torch.cuda.memory_allocated(device) / (1024**3))
+    W2 = W2.t().contiguous()
+    if device.type == "cuda":
+        print("Current memory: ", torch.cuda.memory_allocated(device) / (1024**3))
+    elif device.type == "mps":
+        print("Current memory: ", torch.mps.current_allocated_memory() / (1024**3))
+    else:
+        print("Current memory: 0")
     memory = peak_memory(f, x, W1, W2, b1, b2, wn, bn, device=device)
-
     print("Peak memory: ", memory / (1024**3))
     return memory
 
 
 def test():
-    # Setup
     torch.manual_seed(0)
     torch.set_grad_enabled(False)
-    device = torch.device("cuda")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
 
-    # Check correctness
     check_correctness(fused, unfused, device=device)
 
-    # Compute performance
     print("")
     print("Performance")
-    benchmark.run(print_data=True, show_plots=False)
+    if device.type == "cuda":
+        benchmark.run(print_data=True, show_plots=False, device="cuda")
+    elif device.type == "mps":
+        benchmark.run(print_data=True, show_plots=False, device="mps")
+    else:
+        benchmark.run(print_data=True, show_plots=False, device="cpu")
     print("")
 
-    # Compute memory
-    memory_fused = memory_triton(fused, device=device)
-    memory_unfused = memory_baseline(unfused, device=device)
-    memory_compile = memory_baseline(compiled, device=device)
-
-    print("")
-    print("Memory savings against unfused: ", memory_unfused / memory_fused)
-    print("Memory savings against compile: ", memory_compile / memory_fused)
-    print("")
+    if device.type == "cuda":
+        memory_fused = memory_triton(fused, device=device)
+        memory_unfused = memory_baseline(unfused, device=device)
+        memory_compile = memory_baseline(compiled, device=device)
+        print("")
+        print("Memory savings against unfused: ", memory_unfused / memory_fused)
+        print("Memory savings against compile: ", memory_compile / memory_fused)
+        print("")
+    else:
+        print("Memory profiling only supported on CUDA.")
 
 
 if __name__ == "__main__":
