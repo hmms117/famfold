@@ -738,47 +738,37 @@ class Rotation:
 
     def cuda(self) -> Rotation:
         """
-        Analogous to the cuda() method of torch Tensors
+        Moves the transformation object to GPU memory (CUDA or MPS if available)
 
         Returns:
-            A copy of the Rotation in CUDA memory
+            A version of the transformation on GPU (CUDA or MPS)
         """
-        if self._rot_mats is not None:
-            return Rotation(rot_mats=self._rot_mats.cuda(), quats=None)
-        elif self._quats is not None:
-            return Rotation(
-                rot_mats=None, quats=self._quats.cuda(), normalize_quats=False
-            )
+        # Prefer CUDA if available, else MPS, else CPU
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
         else:
-            raise ValueError("Both rotations are None")
+            device = torch.device("cpu")
+        return self.to(device)
 
-    def to(
-        self, device: Optional[torch.device], dtype: Optional[torch.dtype]
-    ) -> Rotation:
+    def to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> Rigid:
         """
-        Analogous to the to() method of torch Tensors
+        Moves the transformation object to the specified device and dtype.
 
         Args:
-            device:
-                A torch device
-            dtype:
-                A torch dtype
+            device: torch.device or None
+            dtype: torch.dtype or None
         Returns:
-            A copy of the Rotation using the new device and dtype
+            A version of the transformation on the specified device/dtype
         """
-        if self._rot_mats is not None:
-            return Rotation(
-                rot_mats=self._rot_mats.to(device=device, dtype=dtype),
-                quats=None,
-            )
-        elif self._quats is not None:
-            return Rotation(
-                rot_mats=None,
-                quats=self._quats.to(device=device, dtype=dtype),
-                normalize_quats=False,
-            )
-        else:
-            raise ValueError("Both rotations are None")
+        rots = self._rots
+        trans = self._trans
+        if rots is not None:
+            rots = rots.to(device=device, dtype=dtype)
+        if trans is not None:
+            trans = trans.to(device=device, dtype=dtype)
+        return Rigid(rots, trans)
 
     def detach(self) -> Rotation:
         """
@@ -1365,9 +1355,54 @@ class Rigid:
 
     def cuda(self) -> Rigid:
         """
-        Moves the transformation object to GPU memory
+        Moves the transformation object to GPU memory (CUDA or MPS if available)
 
         Returns:
-            A version of the transformation on GPU
+            A version of the transformation on GPU (CUDA or MPS)
         """
-        return Rigid(self._rots.cuda(), self._trans.cuda())
+        # Prefer CUDA if available, else MPS, else CPU
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        return self.to(device)
+
+    def to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> Rigid:
+        """
+        Moves the transformation object to the specified device and dtype.
+
+        Args:
+            device: torch.device or None
+            dtype: torch.dtype or None
+        Returns:
+            A version of the transformation on the specified device/dtype
+        """
+        rots = self._rots
+        trans = self._trans
+        if rots is not None:
+            rots = rots.to(device=device, dtype=dtype)
+        if trans is not None:
+            trans = trans.to(device=device, dtype=dtype)
+        return Rigid(rots, trans)
+
+    def detach(self) -> Rotation:
+        """
+        Returns a copy of the Rotation whose underlying Tensor has been
+        detached from its torch graph.
+
+        Returns:
+            A copy of the Rotation whose underlying Tensor has been detached
+            from its torch graph
+        """
+        if self._rot_mats is not None:
+            return Rotation(rot_mats=self._rot_mats.detach(), quats=None)
+        elif self._quats is not None:
+            return Rotation(
+                rot_mats=None,
+                quats=self._quats.detach(),
+                normalize_quats=False,
+            )
+        else:
+            raise ValueError("Both rotations are None")

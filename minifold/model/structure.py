@@ -396,7 +396,8 @@ class StructureModule(nn.Module):
         unnormalized_angles, angles = self.angle_resnet(s, s_initial)
 
         # Predict positions
-        with torch.autocast("cuda", enabled=False):
+        device = torch.device("mps" if torch.backends.mps.is_available() else "cuda")
+        with torch.autocast(device.type, enabled=False):
             # Predict frames
             n, ca, c = self.bb_update(s.float()).chunk(3, dim=-1)
             rigids = Rigid.make_transform_from_reference(n, ca, c, eps=1e-7)

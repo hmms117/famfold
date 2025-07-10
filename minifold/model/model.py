@@ -274,7 +274,8 @@ class MiniFoldModel(nn.Module):
             raise ValueError("Kernels can only be used at inference.")
 
         # For some reason having inference issues with autocast on the LM
-        with torch.autocast("cuda", enabled=self.training, dtype=torch.bfloat16):
+        device = torch.device("mps" if torch.backends.mps.is_available() else "cuda")
+        with torch.autocast(device.type, enabled=self.training, dtype=torch.bfloat16):
             idx = self.lm.num_layers
             lm_out = self.lm(batch["seq"], repr_layers=[idx], need_head_weights=True)
             s_s = lm_out.pop("representations")[idx]

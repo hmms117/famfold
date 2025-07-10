@@ -42,7 +42,8 @@ def triangular(
     x = x * mask.unsqueeze(-1)
 
     # Split input and cast to float
-    with torch.autocast("cuda", enabled=False):
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda")
+    with torch.autocast(device.type, enabled=False):
         a1, b1, a2, b2 = torch.chunk(x.float(), 4, dim=-1)
 
         # Triangular projection
@@ -95,7 +96,8 @@ def triangular_kernel_func(
     x = x * mask.unsqueeze(-1)
 
     # Split input and cast to float
-    with torch.autocast("cuda", enabled=False):
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda")
+    with torch.autocast(device.type, enabled=False):
         a1, b1, a2, b2 = torch.chunk(x.float(), 4, dim=-1)
 
         # Triangular projection

@@ -62,7 +62,16 @@ def output_to_pdb(seq, coords, mask, plddt):
     return to_pdb(pred)
 
 
-def create_model(checkpoint, compile=False, kernels=False):
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
+
+
+def create_model(checkpoint, device, compile=False, kernels=False):
     # Load checkpoint
     ckpt = torch.load(checkpoint, map_location="cpu")
     hparams = ckpt["hyper_parameters"]
@@ -106,7 +115,7 @@ def create_model(checkpoint, compile=False, kernels=False):
         )
 
     # Move model to device
-    model = model.to("cuda")
+    model = model.to(device)
     model.eval()
 
     return alphabet, model
@@ -239,6 +248,10 @@ def predict(
     # Download necessary data and model
     download(cache, model_size)
 
+    # Detect device
+    device = get_device()
+    print(f"Using device: {device}")
+
     # Load model
     if checkpoint is None:
         checkpoint = cache / f"minifold_{model_size}.ckpt"
@@ -251,7 +264,7 @@ def predict(
 
     # Load checkpoint
     print("Load model...")
-    alphabet, model = create_model(checkpoint, compile)
+    alphabet, model = create_model(checkpoint, device, compile)
 
     # Create batches
     config = model_config(
@@ -306,14 +319,15 @@ def predict(
 
         # Move to device
         model_batch = {
-            "seq": seq.to("cuda"),
-            "mask": mask.to("cuda"),
-            "batch_of": {k: v.to("cuda") for k, v in batch_of.items()},
+            "seq": seq.to(device),
+            "mask": mask.to(device),
+            "batch_of": {k: v.to(device) for k, v in batch_of.items()},
         }
 
         # Run predictions
         try:
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            autocast_device = "cuda" if device.type == "cuda" else ("cpu" if device.type == "cpu" else "mps")
+            with torch.autocast(autocast_device, dtype=torch.bfloat16):
                 out = model(model_batch, num_recycling=num_recycling)
                 out_pos = out.pop("final_atom_positions")
                 out_mask = out.pop("final_atom_mask")
