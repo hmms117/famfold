@@ -207,9 +207,17 @@ The following plan details how to operationalize all prerequisite assets—struc
 ### 12.2 FoldMason Structural Alignment (`foldmason_align`)
 - **When to run**: use this stage when structural column consistency materially improves the prior (e.g., domain shuffling or long insertions). Skip it entirely for compact, single-domain families where simple sequence alignment suffices.
 - **Inputs**: list of template structure paths, optional residue range masks.
-- **Processing**
-  - Invoke FoldMason in batch mode with GPU acceleration where available.
-  - Export superposed coordinates and residue mapping tables (`structure_id`, `residue_index` → `msa_position`).
+- **Processing (spell-out subtasks)**
+  1. **Pre-flight checks**
+     - Confirm GPU/CPU resources match FoldMason requirements.
+     - Validate every template path exists and has matching sequence IDs in the FASTA.
+  2. **Alignment execution**
+     - Launch FoldMason with a manifest of structure paths (`foldmason_align --config-name run --templates manifest.json`).
+     - For skipped structures (e.g., missing domains), record the exclusion in `foldmason/manifest.json`.
+  3. **Post-processing**
+     - Extract superposed coordinates into `foldmason/superposition_{run_id}.pdb`.
+     - Generate residue mapping tables (`structure_id`, `residue_index` → `msa_position`).
+     - Store per-structure alignment RMSD / TM-scores for diagnostics.
 - **Outputs**
   - `foldmason/superposition_{run_id}.pdb` (aligned stack).
   - `foldmason/mapping_{structure_id}.json` capturing MSA position mapping and per-residue pLDDT.
@@ -217,9 +225,22 @@ The following plan details how to operationalize all prerequisite assets—struc
 
 ### 12.3 Family MSA Expansion (`expand_msa`)
 - **Inputs**: initial structural alignment manifest, family FASTA, optional external sequence databases.
-- **Processing**
-  - Seed an MSA using the residue mappings; run profile-sequence alignment tools (e.g., HHblits/JackHMMER) to add remaining family sequences.
-  - Optionally enforce domain segmentation via HMM boundaries to avoid misaligned insertions.
+- **Processing (spell-out subtasks)**
+  1. **Seed alignment construction**
+     - If FoldMason was run, convert residue↔MSA tables into an initial A3M; otherwise align reference structures with MUSCLE/MAFFT.
+     - Normalize column numbering to match template indexing.
+  2. **Profile generation**
+     - Build an HMM profile from the seed alignment (`hmmbuild`).
+     - Store profile checksum for reproducibility.
+  3. **Database search**
+     - Run HHblits or JackHMMER against selected databases (UniRef, custom family DBs) with configured e-value thresholds.
+     - Append newly found sequences to the family FASTA if desired, tagging provenance.
+  4. **Alignment expansion**
+     - Merge hits into the seed alignment (`hmmalign` / `hhalign`).
+     - Enforce optional domain segmentation via HMM boundaries to avoid misaligned insertions.
+  5. **Quality control**
+     - Compute per-sequence coverage and effective sequence counts.
+     - Flag sequences with <30% coverage or high gap fractions.
 - **Outputs**
   - `msa/family_{run_id}.a3m` and compressed `msa/family_{run_id}.stk`.
   - Coverage statistics per sequence (`msa/coverage.json`) for routing and weight computation.
@@ -227,10 +248,23 @@ The following plan details how to operationalize all prerequisite assets—struc
 
 ### 12.4 Distogram Prior Construction (`distogram_prior`)
 - **Inputs**: structural mapping manifests, full MSA, per-residue pLDDT.
-- **Processing**
-  - Convert each structure to MiniFold binning (`B=64`, 2–25 Å). Use numba/torch to parallelize per-template histograms.
-  - Map to MSA coordinates and compute weights `coverage × pLDDT_i × pLDDT_j × identity_to_query`.
-  - Aggregate across templates, storing both dense tensors and sparse top-*k* views (for GPU efficiency).
+- **Processing (spell-out subtasks)**
+  1. **Template ingestion**
+     - Load each template JSON, validate schema, and map residue indices to alignment columns.
+     - Normalize pLDDT to `[0,1]` and store as float32 tensors.
+  2. **Distance histogramming**
+     - Convert each structure to MiniFold binning (`B=64`, 2–25 Å) using vectorized GPU kernels or numba.
+     - Persist per-template histograms for audit if `--keep-intermediates` is set.
+  3. **Weight computation**
+     - Evaluate weights `coverage × pLDDT_i × pLDDT_j × identity_to_query` with configurable exponents (β, α).
+     - Zero out weights for masked residues (e.g., `pLDDT < 0.5`).
+  4. **Aggregation**
+     - Sum weighted one-hot tensors into global logits; compute `P_family` via softmax.
+     - Derive `W_family` as the total weight per pair.
+  5. **Serialization**
+     - Save dense tensors grouped by bucket length.
+     - Generate sparse top-*k* (default 2) COO representations for efficient GPU loading.
+     - Emit calibration metadata (mean/variance of weights, template contributions).
 - **Outputs**
   - `priors/distogram_{bucket}.npz`: packed tensors (`P_family`, `W`).
   - `priors/distogram_{bucket}_sparse.npz`: coordinate list for top-*k* bins.
@@ -238,33 +272,59 @@ The following plan details how to operationalize all prerequisite assets—struc
 
 ### 12.5 ESM-2 Embedding Shards (`esm2_embed`)
 - **Inputs**: family FASTA, Hydra config specifying model checkpoint, batch size, masking fractions for pseudo-perplexity.
-- **Processing**
-  - Run batched ESM-2 forward passes (FP16 where possible) to extract last-layer embeddings and logits required for BPR.
-  - Cache embeddings per length bucket to align with inference batching.
-  - Compute pseudo-perplexity estimates on-the-fly (mask 20–25% residues, repeat 3×) and log calibrated statistics if a reference distribution is supplied.
+- **Processing (spell-out subtasks)**
+  1. **Shard planning**
+     - Partition sequences into length buckets and chunk sizes (`--max-batch`), recording shard manifests.
+     - Warm caches by loading any existing embeddings and skipping already-processed IDs.
+  2. **Forward passes**
+     - Run batched ESM-2 forward passes (FP16/BF16 when supported) to extract required embeddings.
+     - Persist intermediate logits if later layers (e.g., LoRA fine-tuning) are anticipated.
+  3. **Pseudo-perplexity sampling**
+     - For each sequence shard, mask 20–25% of residues, repeat 3× with different RNG seeds, and compute BPR.
+     - Store both raw log-prob sums and normalized bits-per-residue.
+  4. **Caching & indexing**
+     - Write embeddings to `embeddings/{bucket}/sequence_id.pt` and update an index file for fast lookup.
+     - Append BPR statistics to `embeddings/bpr_metrics.parquet`, including z-scores if calibration stats are provided.
+  5. **Cleanup**
+     - Optionally delete temporary logits to save disk, retaining hashes in the manifest.
 - **Outputs**
   - `embeddings/{bucket}/sequence_id.pt` (torch tensors with single and pair features).
   - `embeddings/bpr_metrics.parquet` for routing thresholds.
 
 ### 12.6 FAISS Index Build (`build_faiss`)
 - **Inputs**: embedding shards, optional dimensionality reduction parameters (PCA/OPQ).
-- **Processing**
-  - Train PCA/OPQ transforms when configured; apply to embeddings.
-  - Build IVF/HNSW index tuned for family size; record recall/latency benchmarks.
-  - Store neighbor graphs (`topk_neighbors.parquet`) for debugging and as a warm cache.
+- **Processing (spell-out subtasks)**
+  1. **Vector assembly**
+     - Load cached embeddings per bucket, apply optional pooling (mean, CLS token, etc.).
+     - Standardize vectors (mean-centering / variance scaling) before training.
+  2. **Dimensionality reduction**
+     - Train PCA/OPQ transforms if configured; persist transformation matrices for reuse.
+     - Apply transforms to all embeddings, keeping both raw and reduced copies when `--keep-raw` is set.
+  3. **Index training & build**
+     - Choose index type (e.g., IVF-PQ, HNSW) based on family size specified in Hydra config.
+     - Train the index on a training split, then add all vectors from the bucket.
+  4. **Quality evaluation**
+     - Run recall@k and latency benchmarks using a validation subset.
+     - Store neighbor graphs (`topk_neighbors.parquet`) and diagnostics in the manifest.
+  5. **Serialization**
+     - Save the index (`faiss_{bucket}.index`) and metadata JSON capturing hyperparameters, vector counts, and evaluation metrics.
 - **Outputs**
   - `data/index/faiss_{bucket}.index` and associated `faiss_{bucket}.meta.json` capturing hyperparameters and embedding stats.
 
 ### 12.7 Typer + Hydra CLI Skeleton
 - **Entry point**: `minifold/cli/familyfold.py` registered in `pyproject.toml` as `familyfold` console script.
-- **Typer app**: root command `familyfold` with subcommands: `foldmason-align`, `expand-msa`, `distogram-prior`, `esm2-embed`, `build-faiss`, and `precompute-all` (runs the full chain respecting dependencies).
+- **Typer app (spell-out subtasks)**
+  1. Define a root `Typer` application and attach subcommands: `foldmason-align`, `expand-msa`, `distogram-prior`, `esm2-embed`, `build-faiss`, `precompute-all`, and `verify-manifests`.
+  2. For each subcommand, declare typed arguments (paths, run IDs, config overrides) and default Hydra config names.
+  3. Implement dependency checks so stages fail fast when required manifests are missing.
 - **Hydra integration**
   - Each subcommand loads a Hydra config (`configs/familyfold/{stage}.yaml`) describing tool paths, resource limits, input manifests, and output directories.
   - Support `--config-name` and `--config-path` overrides; expose critical overrides as CLI options (e.g., `--bucket-length`, `--faiss-metric`).
   - Use Hydra sweepers to distribute workloads across GPUs/hosts if needed (`familyfold sweep precompute-all hydra/sweeper=submitit`).
 - **Logging & telemetry**
-  - Structured logs (JSON) per stage stored under `logs/{stage}/{timestamp}.jsonl`.
-  - Emit completion summary with paths to generated manifests for downstream automation.
+  1. Emit structured logs (JSON) per stage stored under `logs/{stage}/{timestamp}.jsonl`.
+  2. Surface run metadata (elapsed time, input/output counts, cache hits) in Typer’s console output.
+  3. Emit completion summary with paths to generated manifests for downstream automation.
 
 ### 12.8 Validation & Monitoring
 - Implement a Typer subcommand `verify-manifests` that checks hashes, expected file counts, and basic sanity metrics (e.g., average coverage, BPR percentile histograms).
