@@ -1,45 +1,34 @@
 # FamilyFold Bulk Prediction Pipeline Plan
 
 ## 1. Objectives and Scope
-- Deliver fast, bulk monomer structure predictions for all sequences in a protein family while preserving accuracy.
-- Reuse known high-confidence family structures (with per-residue pLDDT) and existing PLM infrastructure (MiniFold / ESMFold).
-- Integrate lightweight retrieval (FAISS) and a MiniFold variant that ingests a family-derived geometric prior.
+- Deliver **fast, bulk monomer** structure predictions for all sequences in a protein family (typically 300–500 AA) while preserving accuracy.
+- Reuse high-confidence family structures (with per-residue **pLDDT**) and existing PLM infrastructure (**MiniFold** primary; **ESMFold** fallback).
+- Integrate lightweight retrieval with **Protriever** (FAISS optional) or an **Easy ESM-RAG** fallback to specialize priors per query.
+- Inject a **family-derived, pLDDT-weighted geometric prior** into MiniFold and optionally sharpen it via alignment-informed conditioning for each query.
+- Avoid standalone MSAs at inference by default; only run FoldMason/MAFFT when structural column normalization measurably helps multi-domain or insertion-heavy families.
 
 ## 2. Inputs
 1. **Sequence set**: FASTA-formatted sequences for the target family (assumed to share at least one structural domain). Every sequence should be folded.
-2. **Reference structures**: PDB/mmCIF files for one or more family members. File IDs match sequence identifiers in the FASTA. Each structure includes per-residue pLDDT or an equivalent confidence score.
+2. **Reference structures**: PDB/mmCIF files for one or more family members. File IDs match sequence identifiers in the FASTA. Each structure includes per-residue pLDDT or an equivalent confidence score (AFDB PDBs encode pLDDT in the B-factor; experimental structures may require mmCIF QA tables).
+3. *(Optional)* **Seed structural alignment** (FoldMason/MAFFT) for families with large insertions or domain shuffling. Default: skip for single-domain families where retrieval alone produces consistent columnning.
 
 ## 3. Expected Outputs
-- Predicted 3D structures (PDB) for every input sequence.
-- Per-residue confidence (pLDDT) and pairwise distance entropies for gating/quality control.
-- Optional metadata: template usage summary, entropy scores, and routing decisions (fast pass vs. refinement).
+- Predicted 3D structures (mmCIF/PDB) for every input sequence.
+- Per-sequence metrics for routing and QA: normalized distogram entropy \(H_{norm}\), prior strength \(S_{prior}\), agreement \(A\), and retrieval coverage/identity/similarity.
+- Manifests: template usage summary, thresholds, route taken (fast/refine/escalate), runtimes, and escalation triggers.
 
 ## 4. High-Level Pipeline
-1. **Template preparation**
-   - Parse the provided family structures to extract sequences, per-residue pLDDT, and Cα distograms in MiniFold's 64-bin (2–25 Å) format.
-   - Optionally run FoldMason (or similar) to generate a canonical residue↔MSA column map when the family exhibits domain shuffling or inconsistent insertions; skip this step for compact, single-domain families where simple sequence alignment suffices.
-2. **Family-wide alignment (optional)**
-   - Seed an alignment using the structural superposition when available, or rely on sequence-profile tools to align the remaining family members.
-   - Persist residue coverage statistics for downstream weighting regardless of whether the alignment originates from FoldMason.
-3. **Family geometry prior construction**
-   - Aggregate per-template distograms into a global family prior `P_family(i, j, b)` with companion weights `W_family(i, j)` using pLDDT-, coverage-, and identity-based weighting.
-   - Store both dense tensors and sparse top-*k* bin representations per length bucket for reuse during inference.
-4. **Sequence embedding & retrieval layer**
-   - Embed all family sequences with ESM-2 (MiniFold-compatible features) and cache results by length bucket.
-   - Build a FAISS (or ESM-RAG) index over template embeddings for fast nearest-neighbor lookup.
-   - For each query or batch, retrieve the top-*k* folded templates to specialize the family prior toward the closest homologs.
-5. **MiniFold feature assembly**
-   - Tile single-sequence embeddings into pair representations, then inject the query-specific prior channels (soft probabilities or one-hot argmax plus weights) ahead of the MiniFormer stack.
-6. **Fast MiniFold inference**
-   - Run the 10-layer MiniFold variant without a structure module, relying on distogram recycling to blend predictions with the injected prior.
-   - Execute a single forward pass (zero or one recycle) for the default fast path.
-7. **Coordinate realization**
-   - Recover 3D coordinates via the parameter-free MiniFold MDS realizer (shortest-path completion → classical MDS → LBFGS stress majorization) with chirality checks.
-8. **Confidence gating & refinement**
-   - Combine MiniFold distogram entropy, agreement with the prior, retrieval coverage, and sequence-only OOD signals (see §7) to decide whether to accept, recycle once with prior decay, or escalate to ESMFold.
-9. **Batch orchestration & homolog handling**
-   - Bucket sequences by length (e.g., 256/384/512 AA) to minimize padding and exploit MiniFold's memory savings for large batches.
-   - Cluster ≥85–90% identity homologs so they can reuse cached embeddings, priors, and retrieval hits within the same batch.
+1. **TemplatePrep** — parse templates → `{seq, pLDDT[L], distogram bins[L×L]}` plus optional residue↔MSA maps when FoldMason is enabled.
+2. **FamilyPrior** — aggregate template distograms into global `P_family(i,j,b)` and `W_family(i,j)` tensors (dense + sparse top-\(k\) storage).
+3. **Retrieval (Protriever / Easy ESM-RAG)** — embed sequences with ESM-2, retrieve top-\(k\) templates per query (identity/coverage/bitscore or cosine similarity), and cluster ≥85% identity homologs.
+4. **Alignment-Informed Prior (AIP)** — align each query to its hits; sharpen `P_family` locally using template distances weighted by pLDDT, identity, and gap context; emit per-query `P_{prior}`, `W`, and strength tensor `γ`.
+5. **FeatureBuilder (La-Proteina)** — load cached ESM-2 embeddings, tile sequence→pair features, and inject prior channels (Mode A: one-hot + weights; Mode B: logit biases).
+6. **MiniFold Fast Inference & Coordinates** — choose between:
+   - **6A Template-Thread & Warp** (top-hit identity ≥0.85 and coverage ≥0.70): thread onto best template, warp only mutation windows (±16 residues), skip global MDS.
+   - **6B Distogram→Coords** (default): run MiniFold fast pass (0 recycles) with prior injection, then realize coordinates via shortest-path completion → classical MDS → LBFGS plus chirality check.
+7. **Router (Uncertainty)** — compute `H_{norm}`, `S_{prior}`, `A`, and coverage to ACCEPT, REFINE (1 recycle with uncertainty-aware prior decay), or ESCALATE to ESMFold.
+8. **Homolog Co-Prediction** — for ≥85% identity clusters, fold representatives first, then specialize homologs within mutation windows while reusing cached artifacts.
+9. **Batch Orchestration & Logging** — bucket by length (256/384/512 AA), maintain mixed-precision caches, and emit manifests capturing retrieval hits, prior usage, routing decisions, and runtimes.
 
 ## 5. System Architecture & Module Graph
 - **Core dependencies**
@@ -57,10 +46,10 @@ family.fasta, reference_structures/
 [02] FamilyPrior ──► priors/distogram_{bucket}.{npz,sparse}
           │
           ▼
-[03] Retrieval (Protriever/FAISS) ──► topk.parquet, clusters.json
+[03] Retrieval (Protriever/ESM-RAG) ──► topk.parquet, clusters.json
           │
           ▼
-[04] PriorBuilder ──► query-specific P_prior, W, γ
+[04] Alignment-Informed Prior ──► query-specific P_prior, W, γ
           │
           ▼
 [05] FeatureBuilder (La-Proteina + ESM-2) ──► pair features + prior channels
@@ -96,62 +85,67 @@ Each module emits structured manifests so downstream stages can operate determin
 
 ## 7. Module Specifications
 ### [01] TemplatePrep
-- **Responsibility**: parse structures, compute MiniFold-ready distograms, and extract per-residue pLDDT.
-- **Inputs**: `reference_structures/` (PDB/mmCIF); optional FoldMason residue↔MSA maps.
-- **Outputs**: `templates/template_{id}.json`, `retrieval/template_bank.faa`.
+- **Responsibility**: parse structures, compute MiniFold-ready distograms, extract per-residue pLDDT, and package metadata for downstream retrieval/alignment.
+- **Inputs**: `reference_structures/` (PDB/mmCIF); optional FoldMason residue↔MSA maps and structural alignment manifests.
+- **Outputs**: `templates/template_{id}.json` or `.npz`, `retrieval/template_bank.faa`, QC summaries.
 - **Algorithm**:
   1. Parse chains to obtain sequence, length, and Cα coordinates.
   2. Compute pairwise distances; discretize into 64 MiniFold bins (2–25 Å, last bin ≥25 Å).
-  3. Pull per-residue pLDDT (PDB `B-factor`, CIF `pLDDT` tables) and normalize to [0, 1].
-  4. Optionally attach FoldMason residue→MSA indices when structural alignment is used.
+  3. Pull per-residue pLDDT (AFDB: PDB `B-factor`; experimental: mmCIF QA tables) and normalize to [0, 1].
+  4. Compute summary statistics (mean/median pLDDT; reject templates with mean <70).
+  5. Optionally attach FoldMason residue→MSA indices when structural alignment is used.
 
 ### [02] FamilyPrior
-- **Responsibility**: aggregate template distograms into a reusable family prior.
-- **Inputs**: template JSON blobs (and optional FoldMason maps).
-- **Outputs**: dense and sparse priors (`priors/distogram_{bucket}*.npz`), `metadata.json`.
-- **Weighting**: `W_t_global[i,j] = (plddt_i · plddt_j)^β × coverage_ij`, with β≈1.0 for the global prior.
-- **Aggregation**: sum weighted one-hot distograms across templates, apply softmax over bins, and store companion weight matrix `W_family`.
+- **Responsibility**: aggregate template distograms into a reusable family prior that can be specialized per query.
+- **Inputs**: template JSON/NPZ blobs (and optional FoldMason maps).
+- **Outputs**: dense and sparse priors (`priors/distogram_{bucket}*.npz`), `metadata.json` with weight statistics.
+- **Weighting**: `W_t_global[i,j] = (plddt_i · plddt_j / 10_000)^β × coverage_{ij}` with β≈1.0; mask low-pLDDT (<0.5) residues.
+- **Aggregation**: sum weighted one-hot distograms across templates, apply softmax over bins to obtain `P_family`, and store companion weight matrix `W_family`. Persist top-2 bins per pair in COO format for fast loading.
 
-### [03] Retrieval (Protriever/FAISS)
-- **Responsibility**: discover top-*k* template neighbors per query and cluster ≥85–90% identity homologs.
-- **Inputs**: `family.fasta`, `template_bank.faa`, optional template embeddings.
-- **Outputs**: `retrieval/topk.parquet` with scores, `retrieval/clusters.json` for homolog groupings.
-- **Implementation**: default to Protriever + FAISS; provide an ESM-RAG matmul fallback when FAISS is unavailable.
+### [03] Retrieval (Protriever / Easy ESM-RAG)
+- **Responsibility**: discover top-*k* template neighbors per query, surface identity/coverage/bitscore metadata, and cluster ≥85% identity homologs for consensus folding.
+- **Inputs**: `family.fasta`, `template_bank.faa`, cached template embeddings, optional FAISS indices.
+- **Outputs**: `retrieval/topk.parquet` with scores, `retrieval/clusters.json` for homolog groupings, optional similarity matrices.
+- **Implementation**: default to Protriever + FAISS (inner-product or cosine distance); fall back to Easy ESM-RAG (normalized ESM-2 embeddings, `Q @ Eᵀ`) when FAISS is unavailable.
 
-### [04] PriorBuilder
-- **Responsibility**: specialize the global prior for each query using retrieval hits.
-- **Inputs**: `P_family`, `W_family`, per-template distograms, `topk.parquet` rows.
-- **Outputs**: query-specific `P_prior`, `W`, and per-pair strength tensor `γ`.
+### [04] Alignment-Informed Prior (AIP)
+- **Responsibility**: specialize the global prior for each query using retrieval hits and their alignments.
+- **Inputs**: `P_family`, `W_family`, per-template distograms, pLDDT vectors, `topk.parquet` rows, and alignment maps (`map_q→t`).
+- **Outputs**: query-specific `P_prior`, `W`, strength tensor `γ`, and diagnostics (consensus, conflict flags).
 - **Computation**:
-  - Weight contributions by `(plddt_i · plddt_j)^β × coverage_ij × identity_to_query^α` (β≈1.5, α≈1.0).
-  - Optionally hard-mask residues with pLDDT < 0.5.
-  - Normalize weights, emit soft or one-hot priors plus `γ` scaled to [0, 1].
+  - Compute per-template weights `W_t[i,j] = (c_i c_j)^β × coverage_{ij} × identity_to_query^α × context(i,j)` where `c_i = plddt_t[i]/100`, β≈1.5, α≈1.0.
+  - Build Gaussian-like templates around aligned distances with width \(σ\) governed by pLDDT, identity, and mutation-window penalties; mix with the global prior via `λ` (≈0.5, reduced in mutation-dense regions).
+  - Aggregate across templates by summing logit-weighted contributions and normalizing to produce `P_prior`; compute `γ` via min–max scaling of total weights; emit consensus/conflict metrics for router logging.
 
 ### [05] FeatureBuilder (La-Proteina)
 - **Responsibility**: assemble MiniFold-compatible features and inject priors.
 - **Inputs**: La-Proteina dataloader batches, cached ESM-2 embeddings, query-specific priors.
-- **Outputs**: pair features with appended prior channels (Mode A: one-hot + weights; Mode B: logit biases).
+- **Outputs**: pair features with appended prior channels (Mode A: `γ * one_hot(P_prior)` + `W`; Mode B: `γ * logit(P_prior)` bias terms).
 - **Notes**:
   - Bucket by length (256/384/512 AA). Cache embeddings per bucket to avoid redundant ESM-2 calls for near-identical homologs.
   - Support pseudo-perplexity sampling masks so OOD metrics are computed alongside embeddings.
+  - Expose hooks to attenuate `γ` in mutation windows for homolog co-prediction.
 
 ### [06] MiniFoldEngine
-- **Responsibility**: run the fast MiniFold forward pass and produce uncertainty diagnostics.
-- **Inputs**: prior-augmented pair features, recycle count, `γ` tensors.
-- **Outputs**: predicted distograms, entropy metrics, agreement scores, and realized coordinates.
+- **Responsibility**: run the fast MiniFold forward pass, choose the appropriate coordinate path, and produce uncertainty diagnostics.
+- **Inputs**: prior-augmented pair features, recycle count, `γ` tensors, retrieval metadata.
+- **Outputs**: predicted distograms, entropy metrics, agreement scores, realized coordinates, and per-path runtime stats.
+- **Execution paths**:
+  - **Template-thread & warp (6A)** when top-hit identity ≥0.85 and coverage ≥0.70; restrict warping to ±16 residue mutation windows and preserve template backbone elsewhere.
+  - **Distogram→coords (6B)** otherwise; run zero recycles by default, with optional single recycle under router control.
 - **Key metrics**:
   - `H_norm`: normalized distogram entropy.
   - `A`: agreement rate between `P_prior` and predictions (weighted by `W`).
-  - `S_prior`: median prior strength.
-- **Coordinate realization**: MiniFold’s parameter-free MDS realizer with chirality check.
+  - `S_prior`: median prior strength across ±8 residue neighborhoods.
+- **Coordinate realization**: Template-thread path uses restrained local warps; distogram path uses MiniFold’s parameter-free MDS realizer (shortest-path completion → classical MDS → LBFGS) with chirality check.
 
 ### [07] Router
 - **Responsibility**: gate outputs into ACCEPT / REFINE / ESCALATE paths.
-- **Inputs**: `H_norm`, `A`, `S_prior`, retrieval coverage, BPR statistics (see §8).
+- **Inputs**: `H_norm`, `A`, `S_prior`, retrieval coverage/identity, BPR statistics (see §8), and AIP consensus/conflict signals.
 - **Policy (default)**:
-  - ACCEPT when `H_norm ≤ 0.25`, coverage ≥0.70 or `A ≥ 0.60`, and `S_prior ≥ 0.35`.
-  - REFINE when metrics fall in buffer ranges (e.g., `0.25 < H_norm ≤ 0.35`)—trigger one recycle with entropy-driven prior decay `γ_ij ← γ_ij × (1 − conf_ij)`.
-  - ESCALATE to ESMFold when `H_norm > 0.35`, `S_prior < 0.20`, or coverage <0.50 with poor agreement.
+  - **ACCEPT** when `H_norm ≤ 0.25`, coverage ≥0.70 (or `A ≥ 0.60`), and `S_prior ≥ 0.35`.
+  - **REFINE** when metrics fall in buffer ranges (e.g., `0.25 < H_norm ≤ 0.35`, `0.50 ≤ coverage < 0.70`, `0.40 ≤ A < 0.60`, or `0.20 ≤ S_prior < 0.35`). Trigger one recycle with uncertainty-aware prior decay `γ_ij ← γ_ij × (1 − conf_ij)` where `conf_ij = 1 − H(P_pred[i,j,:]) / log 64`.
+  - **ESCALATE** to ESMFold when `H_norm > 0.35`, `S_prior < 0.20`, consensus conflicts persist (AIP disagreement), or coverage <0.50 with poor agreement.
 
 ### [08] HomologCoPredict
 - **Responsibility**: accelerate ≥85% identity clusters via consensus folding and mutation-aware specialization.
@@ -160,6 +154,7 @@ Each module emits structured manifests so downstream stages can operate determin
   2. Fold the representative with the full prior; accept if router thresholds pass.
   3. For remaining homologs, reuse embeddings/prior, attenuate `γ` within ±16 residue mutation windows, and run the fast path.
   4. Share router decisions across the cluster when global metrics stay within acceptance bounds.
+- **Outputs**: per-cluster manifests summarizing reused priors, mutation windows, acceptance outcomes, and optional window RMSD maps relative to the representative.
 
 ## 8. Sequence-Only OOD Detection (ESM-2)
 - **Pseudo-perplexity / bits-per-residue (BPR)**:
@@ -184,16 +179,35 @@ Each module emits structured manifests so downstream stages can operate determin
 - Watch GPU memory; MiniFold reports 20–40× peak memory savings and 15–20× end-to-end speedups, enabling larger homogeneous batches.
 - Implement dynamic batch shrinking to recover gracefully from OOM events.
 
-## 11. Open Questions / Configuration Knobs
-1. Soft vs. one-hot prior injection (Mode A vs. Mode B) for different family topologies.
-2. Entropy, agreement, and BPR thresholds that best balance throughput and accuracy for your dataset.
-3. Whether zero-shot MiniFold suffices or if light fine-tuning on family-primed priors yields measurable gains.
-4. Preferred exposure of knobs (Hydra configs vs. CLI flags) for operators and automation.
+## 11. Knobs & Defaults (tuning order)
+- `k` templates: **4** (tune between 3–8 based on family diversity).
+- Global prior exponent `β`: **1.0**; query-specific exponent **1.5**.
+- Identity exponent `α`: **1.0**.
+- Base prior strength `γ_base`: **0.7** (adjust 0.5–0.8 to avoid over-/under-constraining).
+- Mutation window half-width: **16** residues for warp/attenuation logic.
+- Alignment-informed prior parameters:
+  - Gaussian width `σ_base = 2.0 Å`, shrinks with higher pLDDT/identity and expands near gaps/mutations.
+  - Mixture weight `λ = 0.5` scaled by local mutation density.
+- Router thresholds: `H_norm ≤ 0.25` for accept, `>0.35` for escalate; `S_prior ≥ 0.35` accept floor; coverage ≥0.70 or agreement ≥0.60.
+- BPR z-score gates: escalate when `z > 2.5`, send to refine when `1.5 < z ≤ 2.5`.
 
-## 12. Precomputation Implementation Plan
+## 12. Optional: When to use FoldMason/MAFFT
+- **Use** structural alignment when templates exhibit multi-domain shuffling, long insertions, or inconsistent columnning; it stabilizes AIP conditioning and boosts consensus across templates.
+- **Skip** alignment for compact, single-domain families where retrieval already yields coherent mappings; default pipeline assumes this path.
+- **Rule of thumb**: if >25% of template pairs outside loops show multi-modal distogram bins after aggregation, enable FoldMason + MAFFT to normalize columns before prior construction.
+
+## 13. Open Questions / Next Steps
+1. **AIP calibration**: refine \(σ\) and \(λ\) schedules versus identity/pLDDT on a validation set.
+2. **6A vs 6B split**: confirm identity/coverage thresholds for template-warp vs. distogram realization.
+3. **Router tuning**: revisit thresholds to satisfy throughput/SLO targets on pilot families.
+4. **Prior injection mode**: compare Mode A vs. Mode B under varying family topologies.
+5. **Training vs. zero-shot**: determine whether lightweight MiniFold fine-tuning with priors yields measurable gains.
+6. **Operator experience**: decide which knobs belong in Hydra configs vs. CLI flags for automation.
+
+## 14. Precomputation Implementation Plan
 The following plan details how to operationalize all prerequisite assets—structural alignment, MSAs, priors, embeddings, and retrieval indices—before fast inference begins.
 
-### 12.1 Data Layout & Orchestration
+### 14.1 Data Layout & Orchestration
 - **Workspace layout**
   - `data/raw/`: original FASTA sequences (`family.fasta`) and structure files (`*.pdb` / `*.cif`).
   - `data/intermediate/`: alignment artifacts (`foldmason/`, `msa/`), distilled priors (`priors/`), and embedding shards (`embeddings/`).
@@ -204,7 +218,7 @@ The following plan details how to operationalize all prerequisite assets—struc
   - Each stage writes a manifest JSON (Hydra Structured Config) enumerating outputs for downstream reuse.
 - **Parallelism & caching**: chunk long families by sequence count; run independent Typer subcommands per chunk; rely on manifest timestamps + Hydra `job.override_dirname` for reproducible reruns.
 
-### 12.2 FoldMason Structural Alignment (`foldmason_align`)
+### 14.2 FoldMason Structural Alignment (`foldmason_align`)
 - **When to run**: use this stage when structural column consistency materially improves the prior (e.g., domain shuffling or long insertions). Skip it entirely for compact, single-domain families where simple sequence alignment suffices.
 - **Inputs**: list of template structure paths, optional residue range masks.
 - **Processing (spell-out subtasks)**
@@ -223,7 +237,7 @@ The following plan details how to operationalize all prerequisite assets—struc
   - `foldmason/mapping_{structure_id}.json` capturing MSA position mapping and per-residue pLDDT.
   - Manifest: `foldmason/manifest.json` listing structures processed, alignment score metrics, and quality flags.
 
-### 12.3 Family MSA Expansion (`expand_msa`)
+### 14.3 Family MSA Expansion (`expand_msa`)
 - **Inputs**: initial structural alignment manifest, family FASTA, optional external sequence databases.
 - **Processing (spell-out subtasks)**
   1. **Seed alignment construction**
@@ -246,7 +260,7 @@ The following plan details how to operationalize all prerequisite assets—struc
   - Coverage statistics per sequence (`msa/coverage.json`) for routing and weight computation.
   - Manifest including effective sequence count and warnings for low-coverage members.
 
-### 12.4 Distogram Prior Construction (`distogram_prior`)
+### 14.4 Distogram Prior Construction (`distogram_prior`)
 - **Inputs**: structural mapping manifests, full MSA, per-residue pLDDT.
 - **Processing (spell-out subtasks)**
   1. **Template ingestion**
@@ -270,7 +284,7 @@ The following plan details how to operationalize all prerequisite assets—struc
   - `priors/distogram_{bucket}_sparse.npz`: coordinate list for top-*k* bins.
   - Calibration metadata (mean, variance of weights, template contributions) for debugging.
 
-### 12.5 ESM-2 Embedding Shards (`esm2_embed`)
+### 14.5 ESM-2 Embedding Shards (`esm2_embed`)
 - **Inputs**: family FASTA, Hydra config specifying model checkpoint, batch size, masking fractions for pseudo-perplexity.
 - **Processing (spell-out subtasks)**
   1. **Shard planning**
@@ -291,7 +305,7 @@ The following plan details how to operationalize all prerequisite assets—struc
   - `embeddings/{bucket}/sequence_id.pt` (torch tensors with single and pair features).
   - `embeddings/bpr_metrics.parquet` for routing thresholds.
 
-### 12.6 FAISS Index Build (`build_faiss`)
+### 14.6 FAISS Index Build (`build_faiss`)
 - **Inputs**: embedding shards, optional dimensionality reduction parameters (PCA/OPQ).
 - **Processing (spell-out subtasks)**
   1. **Vector assembly**
@@ -311,7 +325,7 @@ The following plan details how to operationalize all prerequisite assets—struc
 - **Outputs**
   - `data/index/faiss_{bucket}.index` and associated `faiss_{bucket}.meta.json` capturing hyperparameters and embedding stats.
 
-### 12.7 Typer + Hydra CLI Skeleton
+### 14.7 Typer + Hydra CLI Skeleton
 - **Entry point**: `minifold/cli/familyfold.py` registered in `pyproject.toml` as `familyfold` console script.
 - **Typer app (spell-out subtasks)**
   1. Define a root `Typer` application and attach subcommands: `foldmason-align`, `expand-msa`, `distogram-prior`, `esm2-embed`, `build-faiss`, `precompute-all`, and `verify-manifests`.
@@ -326,12 +340,12 @@ The following plan details how to operationalize all prerequisite assets—struc
   2. Surface run metadata (elapsed time, input/output counts, cache hits) in Typer’s console output.
   3. Emit completion summary with paths to generated manifests for downstream automation.
 
-### 12.8 Validation & Monitoring
+### 14.8 Validation & Monitoring
 - Implement a Typer subcommand `verify-manifests` that checks hashes, expected file counts, and basic sanity metrics (e.g., average coverage, BPR percentile histograms).
 - Schedule periodic re-runs via `precompute-all --refresh` to update priors when new templates or sequences arrive.
 - Integrate with CI/CD by adding smoke tests on small toy families to ensure each stage functions and Hydra configs resolve correctly.
 
-## 13. End-to-End Orchestration (Pseudocode)
+## 15. End-to-End Orchestration (Pseudocode)
 ```python
 def run_familyfold(family_fasta, ref_struct_dir):
     # 01 TemplatePrep
@@ -375,12 +389,12 @@ def run_familyfold(family_fasta, ref_struct_dir):
             persist_outputs(query, coords, metrics, hits[query])
 ```
 
-## 14. Testing Strategy
+## 16. Testing Strategy
 ### Phase A — Unit Tests
 - **TemplatePrep**: symmetric bins, correct normalization, pLDDT lengths.
 - **FamilyPrior**: aggregation preserves dominant bins and weight support.
 - **Retrieval**: deterministic top-*k* identity/coverage ordering on toy sets.
-- **PriorBuilder**: single-template case reproduces original distogram; γ scales with pLDDT.
+- **Alignment-Informed Prior (AIP)**: single-template case reproduces original distogram; γ scales with pLDDT.
 - **FeatureBuilder**: embedding cache integrity, padding masks, pseudo-perplexity sampling reproducibility.
 - **MiniFoldEngine**: deterministic logits with fixed seeds; coordinate realizer produces finite, chirality-correct structures.
 - **Router**: synthetic logits hit ACCEPT/REFINE/ESCALATE thresholds as expected.
@@ -402,24 +416,24 @@ def run_familyfold(family_fasta, ref_struct_dir):
 - Evaluate template-sparse families to ensure quick escalations without wasted recycles.
 - Stress-test large homolog clusters and confirm consensus folding delivers throughput gains.
 
-## 15. Milestones (Vertical Slices)
+## 17. Milestones (Vertical Slices)
 - **M0 – Skeleton**: La-Proteina dataloader + MiniFold fast path → coordinates (no priors/router).
 - **M1 – Templates & Priors**: per-template distograms aggregated to family priors; unit tests green.
 - **M2 – Retrieval**: Protriever/FAISS wired with top-*k* manifests and clustering outputs.
-- **M3 – PriorBuilder**: query-specific priors injected (Mode A), end-to-end inference functional.
+- **M3 – AIP**: query-specific priors injected (Mode A), end-to-end inference functional.
 - **M4 – Router**: uncertainty metrics, gating, one recycle with entropy-driven prior decay.
 - **M5 – HomologCoPredict**: consensus + mutation-window specialization; group routing stabilized.
 - **M6 – Calibration**: thresholds tuned on pilot family; acceptance and escalation SLOs met.
 - **M7 – Hardening**: stress tests, dashboards, CI smoke tests, documentation finalized.
 
-## 16. Risks & Guardrails
+## 18. Risks & Guardrails
 - **Bad priors**: mitigate with β exponent tuning, low-pLDDT masking, and `S_prior` gating.
 - **Template topology mismatch**: monitor agreement `A`, decay priors during refinement, escalate when agreement collapses.
 - **Coordinate instability**: enforce chirality checks, escalate rare divergence cases to ESMFold.
 - **Memory spikes/OOM**: length bucketing, sparse priors, dynamic batch shrinking.
 - **Over-recycling**: cap at one recycle; shadow-log outcomes to justify potential future adjustments.
 
-## 17. Definition of Done
+## 19. Definition of Done
 - **Accuracy**: median lDDT within 3 percentage points of ESMFold for accepted sequences on a held-out validation set.
 - **Throughput**: ≥10× faster than ESMFold on ACCEPTed sequences; REFINE ≤15%, ESCALATE ≤5%.
 - **Stability**: chirality flips <1%, deterministic reruns (hash-stable artifacts).
