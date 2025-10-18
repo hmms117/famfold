@@ -1,0 +1,4 @@
+# Placeholder configuration for PyProtect.
+# Enable and configure protected paths when sensitive assets need to be guarded.
+[tool.pyprotect]
+enabled = false

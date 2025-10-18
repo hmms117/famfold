@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
-from esm.pretrained import load_model_and_alphabet
+
+from minifold.utils.esm import load_model_and_alphabet
 
 from minifold.data.of_data import get_data
 from minifold.data.config import model_config
@@ -144,7 +145,7 @@ class MiniFoldDataModule(pl.LightningDataModule):
         self,
         data_dir: str,
         batch_size: int = 1,
-        esm_model_name="esm2_t12_35M_UR50D",
+        esm_model_name="esm2_t36_3B_UR50D",
         esm_cache_path: Optional[str] = None,
         num_workers: int = 0,
         samples_per_epoch: int = 1000000,
