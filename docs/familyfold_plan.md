@@ -1,5 +1,8 @@
 # FamilyFold Implementation Overview
 
+> **Note:** This document mirrors `docs/overview.md` so downstream branches referencing the legacy path can merge without conflicts. Updates should be made in both files.
+
+
 This overview restores the full Tier 1 blueprint for FamilyFold while pointing to
 dedicated documents for each major component. Tier 2 and Tier 3 remain notes for
 forward planning and are captured alongside the Tier 1 references below.
