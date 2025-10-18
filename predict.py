@@ -217,6 +217,12 @@ def prepare_input(seq, config, alphabet):
     is_flag=True,
     help="Whether to use kernels. Default is False.",
 )
+@click.option(
+    "--num_recycling",
+    type=int,
+    default=3,
+    help="Number of recycling iterations for the structure module (default: 3).",
+)
 def predict(
     fasta: str,
     out_dir: str = "./minifold_predictions",

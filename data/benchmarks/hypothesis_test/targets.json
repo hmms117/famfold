@@ -1,0 +1,74 @@
+{
+  "targets": [
+    {
+      "id": "ubiquitin_human",
+      "sequence_path": "./sequences/ubiquitin_human.fasta",
+      "split": "pilot_id",
+      "metadata": {
+        "family": "ubiquitin_like",
+        "category": "in_distribution_easy",
+        "organism": "Homo sapiens",
+        "pdb_references": [
+          {"pdb_id": "1UBQ", "chain_id": "A", "resolution": 1.8}
+        ],
+        "notes": "Classical small beta-grasp fold frequently seen during Minifold training. Useful for verifying baseline quality."
+      }
+    },
+    {
+      "id": "protein_gb1",
+      "sequence_path": "./sequences/protein_gb1.fasta",
+      "split": "full_id",
+      "metadata": {
+        "family": "ig_binding_domain",
+        "category": "in_distribution_medium",
+        "organism": "Streptococcus sp.",
+        "pdb_references": [
+          {"pdb_id": "2GB1", "chain_id": "A", "resolution": 1.1}
+        ],
+        "notes": "Immunoglobulin-binding beta-sandwich domain with well-characterized folding kinetics."
+      }
+    },
+    {
+      "id": "rpl41e_mj",
+      "sequence_path": "./sequences/rpl41e_mj.fasta",
+      "split": "pilot_ood",
+      "metadata": {
+        "family": "ribosomal_l41e",
+        "category": "ood_metagenomic_known",
+        "organism": "Methanocaldococcus jannaschii",
+        "pdb_references": [
+          {"pdb_id": "4V6U", "chain_id": "ZD", "resolution": 3.2}
+        ],
+        "notes": "Archaeal ribosomal protein with extreme lysine bias and sparse structural templates in UniProt-focused datasets."
+      }
+    },
+    {
+      "id": "beta_propeller_6kwc",
+      "sequence_path": "./sequences/beta_propeller_6kwc.fasta",
+      "split": "full_ood",
+      "metadata": {
+        "family": "metagenomic_beta_propeller",
+        "category": "ood_metagenomic_known",
+        "organism": "Uncultured bacterium",
+        "pdb_references": [
+          {"pdb_id": "6KWC", "chain_id": "A", "resolution": 1.9}
+        ],
+        "notes": "Large metagenomic beta-propeller enzyme from JGI with non-canonical blade arrangements and scarce templates."
+      }
+    },
+    {
+      "id": "microviridin_6a5j",
+      "sequence_path": "./sequences/microviridin_6a5j.fasta",
+      "split": "full_ood",
+      "metadata": {
+        "family": "microviridin_peptide",
+        "category": "ood_metagenomic_hard",
+        "organism": "Nostoc punctiforme",
+        "pdb_references": [
+          {"pdb_id": "6A5J", "chain_id": "A", "method": "NMR"}
+        ],
+        "notes": "Macrocyclic metagenomic RiPP displaying constrained backbone and limited structural homologs, challenging template usage."
+      }
+    }
+  ]
+}
