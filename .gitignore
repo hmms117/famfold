@@ -175,3 +175,7 @@ cython_debug/
 
 # DS-Store
 .DS_Store
+
+# AlphaFold DB helper artifacts
+/data/afdb_cache/
+/out/
