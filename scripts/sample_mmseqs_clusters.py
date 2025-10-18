@@ -187,10 +187,10 @@ def load_cluster_memberships(tsv_path: Path) -> Mapping[str, List[str]]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            try:
-                representative, member = line.split("\t", 1)
-            except ValueError as error:
-                raise ValueError(f"Malformed line in {tsv_path}: {line!r}") from error
+            columns = line.split("\t")
+            if len(columns) < 2:
+                raise ValueError(f"Malformed line in {tsv_path}: {line!r}")
+            representative, member = columns[0], columns[1]
             clusters.setdefault(representative, []).append(member)
     return clusters
 
