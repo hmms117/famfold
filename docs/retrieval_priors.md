@@ -48,7 +48,7 @@ produce alignment-ready artifacts.
 - `logs/retrieval.jsonl` — timing, encoder details, fallback usage.
 
 ### Checklist
-1. Generate/query embeddings with ESM-2 (FP16/BF16) and persist per-bucket caches.
+1. Generate/query embeddings with the SaESM2 35M checkpoint (FP16/BF16) to maximise retrieval throughput while staying aligned with the SaESM trunk used in hypothesis testing. Persist per-bucket caches for reuse.
 2. Build FAISS index (inner-product/cosine) or use brute-force similarity when
    dataset is small.
 3. Retrieve top-`k` hits (default `k=6`). Include self-hits, coverage masks, and
