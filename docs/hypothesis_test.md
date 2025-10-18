@@ -13,11 +13,9 @@ Incorporating homolog template structures into Minifold inference improves struc
 - **In-Distribution (ID)**
   - Sample ~50 protein targets from UniProt that are close to Minifold's training distribution.
   - Ensure available ground-truth structures (e.g., PDB structures mapped to UniProt entries).
-  - Seed quick-start experiments with the curated `data/benchmarks/hypothesis_test` families (`ubiquitin_human`, `protein_gb1`).
 - **Out-of-Distribution (OOD)**
   - Select ~50 UniProt proteins with low sequence identity (<30%) to Minifold training data.
   - Include ~50 non-UniProt PDB chains absent from UniProt annotations or far from the training set.
-  - Use the provided metagenomic pilot families (`rpl41e_mj`, `beta_propeller_6kwc`, `microviridin_6a5j`) for early validation.
 - **Pilot Subset**
   - Pick 5 ID and 5 OOD targets to validate the pipelines before full benchmarking.
 
