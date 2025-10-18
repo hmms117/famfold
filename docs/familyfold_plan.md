@@ -790,4 +790,6 @@ This mirrors the stages and ensures Hydra configs align with Typer entry points.
 
 For implementation-ready guidance, dive into the component documents linked
 above. Each file contains Tier 1 checklists, schemas, and validation steps plus
-Tier 2/Tier 3 follow-up notes relevant to that area.
+Tier 2/Tier 3 follow-up notes relevant to that area. When enabling the SaESM2
+fast path, consult the [Tier 1 SaESM2 addendum](familyfold_tier1_plan_addendum.md)
+for operational guidance and cache warmup expectations.
