@@ -1,0 +1,15 @@
+{
+  "output_dir": "./hypothesis_test_outputs",
+  "cache_dir": "./hypothesis_test_cache",
+  "targets_path": "../../data/benchmarks/hypothesis_test/targets.json",
+  "minifold_base": {
+    "enabled": true,
+    "model_size": "12L",
+    "token_per_batch": 512
+  },
+  "minifold_templates": {
+    "enabled": true,
+    "model_size": "12L",
+    "token_per_batch": 512
+  }
+}
