@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from Bio import SeqIO
-from esm.pretrained import load_model_and_alphabet
+from minifold.utils.esm import load_model_and_alphabet
 from tqdm import tqdm
 
 from minifold.model.model import MiniFoldModel

@@ -2,7 +2,7 @@
 # Modified from original code to save 2x inference memory
 # by not doubling the attention storage
 
-from typing import Union
+from typing import Iterable, Optional, Sequence, Set, Union
 import warnings
 import re
 import urllib
@@ -13,6 +13,147 @@ import torch.nn as nn
 
 import esm
 from esm.modules import ContactPredictionHead, ESM1bLayerNorm, RobertaLMHead, TransformerLayer
+
+try:  # pragma: no cover - optional dependency
+    import transformers.models.esm.modeling_esm as _transformers_esm_mod
+    from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions as _BaseOutputWithPast
+
+    if not hasattr(_transformers_esm_mod, "BaseModelOutputWithPastAndCrossAttentions"):
+        _transformers_esm_mod.BaseModelOutputWithPastAndCrossAttentions = _BaseOutputWithPast
+except Exception:  # pragma: no cover - optional dependency
+    pass
+
+
+try:  # pragma: no cover - optional dependency
+    from faesm.esm import FAEsmForMaskedLM
+
+    _FAESM_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    FAEsmForMaskedLM = None
+    _FAESM_AVAILABLE = False
+
+
+FAESM_MODEL_ALIASES = {
+    "esm2_t36_3B_UR50D": "facebook/esm2_t36_3B_UR50D",
+    "faesm_t36_3B_UR50D": "facebook/esm2_t36_3B_UR50D",
+    "faesm_t36_3b_ur50d": "facebook/esm2_t36_3B_UR50D",
+    "faesm/esm2_t36_3B_UR50D": "facebook/esm2_t36_3B_UR50D",
+}
+
+
+def _resolve_faesm_model_name(model_name: str) -> Optional[str]:
+    if model_name in FAESM_MODEL_ALIASES:
+        return FAESM_MODEL_ALIASES[model_name]
+    lower = model_name.lower()
+    if lower in FAESM_MODEL_ALIASES:
+        return FAESM_MODEL_ALIASES[lower]
+    if model_name.startswith("facebook/"):
+        return model_name
+    return None
+
+
+class FlashAlphabet:
+    """Minimal wrapper to emulate the ESM alphabet API for faesm models."""
+
+    prepend_bos: bool = True
+    append_eos: bool = True
+
+    def __init__(self, tokenizer):
+        self._tokenizer = tokenizer
+        self.padding_idx = tokenizer.pad_token_id
+        self.mask_idx = tokenizer.mask_token_id
+        self.cls_idx = tokenizer.cls_token_id
+        self.eos_idx = tokenizer.eos_token_id
+
+        missing = {
+            name: getattr(self, name)
+            for name in ("padding_idx", "mask_idx", "cls_idx", "eos_idx")
+            if getattr(self, name) is None
+        }
+        if missing:
+            raise ValueError(
+                "The provided tokenizer is missing required special tokens: "
+                + ", ".join(missing.keys())
+            )
+
+    def encode(self, sequence: str) -> Sequence[int]:
+        return self._tokenizer.encode(sequence, add_special_tokens=True)
+
+    def __len__(self) -> int:  # pragma: no cover - trivial
+        return self._tokenizer.vocab_size
+
+
+class FlashEsmWrapper(nn.Module):
+    """Adapter that exposes the faesm interface expected by MiniFold."""
+
+    def __init__(self, model_name: str, use_flash: bool = True):
+        if not _FAESM_AVAILABLE:
+            raise ImportError(
+                "faesm is required to load fast ESM models. Install the `faesm`"
+                " package to enable this functionality."
+            )
+
+        super().__init__()
+        self._model = FAEsmForMaskedLM.from_pretrained(model_name, use_fa=use_flash)
+        self.esm = self._model.esm
+        self.lm_head = self._model.lm_head
+        self.contact_head = self.esm.contact_head
+
+        cfg = self._model.config
+        self.embed_dim = cfg.hidden_size
+        self.attention_heads = cfg.num_attention_heads
+        self.num_layers = cfg.num_hidden_layers
+
+        self.pad_idx = self._model.pad_id
+        self.mask_idx = self._model.mask_id
+        self.cls_idx = self._model.bos_id
+        self.eos_idx = self._model.eos_id
+
+        self.tokenizer = self._model.tokenizer
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        repr_layers: Optional[Iterable[int]] = None,
+        need_head_weights: bool = False,
+        return_contacts: bool = False,
+    ) -> dict:
+        if return_contacts:
+            need_head_weights = True
+
+        repr_layers_set: Set[int] = set(repr_layers or [])
+        output_hidden_states = bool(repr_layers_set)
+
+        outputs = self.esm(
+            tokens,
+            attention_mask=tokens.ne(self.pad_idx),
+            output_attentions=need_head_weights,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+
+        result = {
+            "logits": self.lm_head(outputs.last_hidden_state),
+            "representations": {},
+        }
+
+        if output_hidden_states and outputs.hidden_states is not None:
+            hidden_states = list(outputs.hidden_states)
+            for layer_idx in repr_layers_set:
+                if 0 <= layer_idx < len(hidden_states):
+                    result["representations"][layer_idx] = hidden_states[layer_idx]
+
+        if need_head_weights:
+            attentions = outputs.attentions
+            if attentions is None:
+                raise RuntimeError("Attention weights requested but none were returned.")
+            stacked = torch.stack(attentions, dim=1)  # (B, L, H, S, S)
+            result["attentions"] = stacked.permute(0, 3, 4, 1, 2).contiguous()
+
+            if return_contacts and self.contact_head is not None:
+                result["contacts"] = self.contact_head(tokens, result["attentions"])
+
+        return result
 
 
 class ESM2(nn.Module):
@@ -221,7 +362,13 @@ def _load_model_and_alphabet_core_v2(model_data):
     return model, alphabet, state_dict
 
 
-def load_model_and_alphabet(model_name):
+def load_model_and_alphabet(model_name: str, use_flash: bool = True):
+    resolved = _resolve_faesm_model_name(model_name)
+    if resolved is not None:
+        model = FlashEsmWrapper(resolved, use_flash=use_flash)
+        alphabet = FlashAlphabet(model.tokenizer)
+        return model, alphabet
+
     model_data, regression_data = _download_model_and_regression_data(model_name)
 
     if regression_data is not None:

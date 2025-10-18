@@ -15,7 +15,7 @@ from minifold.utils.tensor_utils import tensor_tree_map
 class MiniFold(pl.LightningModule):
     def __init__(
         self,
-        esm_model_name="esm2_t33_650M_UR50D",
+        esm_model_name="esm2_t36_3B_UR50D",
         base_lr: float = 1e-4,
         lm_lr: float = 3e-5,
         struct_lr: float = 1e-4,
