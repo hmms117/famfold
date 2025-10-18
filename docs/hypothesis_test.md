@@ -29,6 +29,10 @@ Incorporating homolog template structures into Minifold inference improves struc
 4. Convert template structures into Minifold-compatible features (e.g., distance matrices, orientation, mask) following the existing template input spec.
 5. Cache template features per target for reproducibility.
 
+## Embedding Backbone Validation
+- Use the SaESM2 650M Hugging Face checkpoint as the sequence trunk for template-augmented experiments. The trunk provides per-residue embeddings and mean-pooled sequence representations that mirror the legacy ESM2 interface.
+- Add a smoke test that runs the SaESM trunk on the pilot sequences, confirming that special tokens are excluded and that pooled embeddings are stable across runs. Record pooled vectors alongside template metadata for auditability.
+
 ## Inference Procedures
 - **Base Minifold**: Use `predict.py` with default configuration.
 - **Minifold + Templates**:

@@ -5,9 +5,16 @@ from pathlib import Path
 from typing import List
 
 import pytest
+import torch
 
 from experiments.hypothesis_test.config import load_config
 from experiments.hypothesis_test.pipeline import BenchmarkPipeline
+from minifold.utils.saesm import (
+    SAESM_DEFAULT_CHECKPOINT,
+    SAESM_FAST_CHECKPOINT,
+    SaESMTrunk,
+    resolve_saesm_checkpoint,
+)
 
 
 class _FakePredictMain:
@@ -121,3 +128,124 @@ def test_structure_module_forward_shapes(patched_autocast, monkeypatch: pytest.M
     assert outputs["frames"].shape[-2:] == (4, 4)
     assert outputs["sidechain_frames"].shape[-2:] == (4, 4)
     assert outputs["single"].shape == (batch, length, module.c_s)
+
+
+class _DummySaESMTokenizer:
+    pad_token_id = 0
+    mask_token_id = 1
+    cls_token_id = 2
+    eos_token_id = 3
+
+    def __call__(self, sequences, return_tensors="pt", padding=True, add_special_tokens=True):
+        if isinstance(sequences, str):
+            sequences = [sequences]
+
+        max_len = max(len(seq) for seq in sequences)
+        target_length = max_len + (2 if add_special_tokens else 0)
+
+        input_ids = []
+        attention_mask = []
+
+        for index, sequence in enumerate(sequences):
+            tokens = []
+            if add_special_tokens:
+                tokens.append(self.cls_token_id)
+            offset = 10 + index * 16
+            tokens.extend([offset + value for value in range(len(sequence))])
+            if add_special_tokens:
+                tokens.append(self.eos_token_id)
+
+            pad_length = target_length - len(tokens)
+            if pad_length < 0:
+                raise ValueError("Token buffer underflow in dummy tokenizer")
+
+            tokens.extend([self.pad_token_id] * pad_length)
+            mask = [1] * (len(tokens) - pad_length) + [0] * pad_length
+
+            input_ids.append(tokens)
+            attention_mask.append(mask)
+
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+        }
+
+
+class _DummySaESMModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = type(
+            "Config",
+            (),
+            {"hidden_size": 3, "num_hidden_layers": 4},
+        )()
+
+    def forward(
+        self,
+        input_ids,
+        attention_mask=None,
+        output_hidden_states=False,
+        output_attentions=False,
+    ):
+        batch, length = input_ids.shape
+        hidden_size = self.config.hidden_size
+        base = torch.arange(batch * length * hidden_size, dtype=torch.float32).reshape(batch, length, hidden_size)
+        hidden_states = tuple(base + layer for layer in range(self.config.num_hidden_layers + 1))
+        last_hidden_state = hidden_states[-1]
+        if output_hidden_states:
+            hidden_output = hidden_states
+        else:  # pragma: no cover - fallback path
+            hidden_output = None
+        if output_attentions:  # pragma: no cover - not exercised in unit test
+            attentions = [
+                torch.ones(batch, 2, length, length, dtype=torch.float32)
+                for _ in range(self.config.num_hidden_layers)
+            ]
+        else:
+            attentions = None
+        return type(
+            "Output",
+            (),
+            {
+                "hidden_states": hidden_output,
+                "attentions": attentions,
+                "last_hidden_state": last_hidden_state,
+            },
+        )()
+
+
+def test_saesm_trunk_embeddings_filter_special_tokens() -> None:
+    trunk = SaESMTrunk(
+        checkpoint=SAESM_DEFAULT_CHECKPOINT,
+        tokenizer=_DummySaESMTokenizer(),
+        model=_DummySaESMModel(),
+        device="cpu",
+    )
+
+    embeddings = trunk.embed_sequences(["AC", "W"])
+
+    assert resolve_saesm_checkpoint("SaESM2-650M") == SAESM_DEFAULT_CHECKPOINT
+    assert resolve_saesm_checkpoint("saesm2_35m") == SAESM_FAST_CHECKPOINT
+
+    assert len(embeddings.per_residue) == 2
+    assert embeddings.per_residue[0].shape == (2, 3)
+    assert embeddings.per_residue[1].shape == (1, 3)
+
+    expected_first = torch.tensor([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])
+    expected_second = torch.tensor([[19.0, 20.0, 21.0]])
+    torch.testing.assert_close(embeddings.per_residue[0], expected_first)
+    torch.testing.assert_close(embeddings.per_residue[1], expected_second)
+
+    expected_pooled = torch.stack(
+        (
+            expected_first.mean(dim=0),
+            expected_second.mean(dim=0),
+        )
+    )
+    torch.testing.assert_close(embeddings.per_sequence, expected_pooled)
+
+    # Ensure CLS/EOS/padding tokens were excluded from residue mask.
+    assert embeddings.residue_mask.shape == embeddings.input_ids.shape
+    assert not embeddings.residue_mask[0, 0]
+    assert not embeddings.residue_mask[0, -1]
+    assert embeddings.residue_mask[0, 1]
