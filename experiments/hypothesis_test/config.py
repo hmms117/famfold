@@ -124,6 +124,8 @@ class MinifoldRunSettings:
     kernels: bool = False
     checkpoint: Optional[Path] = None
     num_recycling: int = 3
+    extra_args: List[str] = field(default_factory=list)
+    environment: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -133,6 +135,8 @@ class BaselineSettings:
     enabled: bool = False
     executable: Optional[str] = None
     extra_args: List[str] = field(default_factory=list)
+    output_subdir: Optional[str] = None
+    environment: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -145,8 +149,11 @@ class BenchmarkConfig:
     pilot_subset_size: int = 5
     minifold_base: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     minifold_templates: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
+    minifold_faplm: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
+    minifold_ism: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     esmfold: BaselineSettings = field(default_factory=BaselineSettings)
     boltz2: BaselineSettings = field(default_factory=BaselineSettings)
+    alphafold2: BaselineSettings = field(default_factory=BaselineSettings)
 
     def get_targets(self, *splits: Split) -> List[TargetConfig]:
         """Return all targets belonging to the requested splits."""
@@ -213,8 +220,11 @@ def load_config(path: Path) -> BenchmarkConfig:
 
     minifold_base = MinifoldRunSettings(**data.get("minifold_base", {}))
     minifold_templates = MinifoldRunSettings(**data.get("minifold_templates", {}))
+    minifold_faplm = MinifoldRunSettings(**data.get("minifold_faplm", {}))
+    minifold_ism = MinifoldRunSettings(**data.get("minifold_ism", {}))
     esmfold = BaselineSettings(**data.get("esmfold", {}))
     boltz2 = BaselineSettings(**data.get("boltz2", {}))
+    alphafold2 = BaselineSettings(**data.get("alphafold2", {}))
 
     pilot_subset_size = int(data.get("pilot_subset_size", 5))
 
@@ -225,6 +235,9 @@ def load_config(path: Path) -> BenchmarkConfig:
         pilot_subset_size=pilot_subset_size,
         minifold_base=minifold_base,
         minifold_templates=minifold_templates,
+        minifold_faplm=minifold_faplm,
+        minifold_ism=minifold_ism,
         esmfold=esmfold,
         boltz2=boltz2,
+        alphafold2=alphafold2,
     )

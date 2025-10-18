@@ -38,17 +38,51 @@ def cli(log_level: str) -> None:
 @click.option("--split", "splits", type=click.Choice([choice.value for choice in Split]), multiple=True)
 @click.option("--pilot", is_flag=True, help="Run only the pilot subset.")
 @click.option("--include-templates", is_flag=True, help="Attempt the template-augmented Minifold run.")
-def run_command(config_path: Path, splits: Iterable[str], pilot: bool, include_templates: bool) -> None:
+@click.option(
+    "--include-faplm",
+    is_flag=True,
+    help="Run the Minifold variant configured for FAPLM when enabled.",
+)
+@click.option(
+    "--include-ism",
+    is_flag=True,
+    help="Run the Minifold variant configured for ISM when enabled.",
+)
+@click.option(
+    "--include-baselines",
+    is_flag=True,
+    help="Run additional baseline predictors when enabled in the configuration.",
+)
+def run_command(
+    config_path: Path,
+    splits: Iterable[str],
+    pilot: bool,
+    include_templates: bool,
+    include_faplm: bool,
+    include_ism: bool,
+    include_baselines: bool,
+) -> None:
     """Execute Minifold inference for the requested dataset partitions."""
 
     config = load_config(config_path)
     pipeline = BenchmarkPipeline(config)
 
     if pilot:
-        outputs = pipeline.pilot(include_templates=include_templates)
+        outputs = pipeline.pilot(
+            include_templates=include_templates,
+            include_faplm=include_faplm,
+            include_ism=include_ism,
+            include_baselines=include_baselines,
+        )
     else:
         split_choices = _parse_splits(splits)
-        outputs = pipeline.full(splits=split_choices, include_templates=include_templates)
+        outputs = pipeline.full(
+            splits=split_choices,
+            include_templates=include_templates,
+            include_faplm=include_faplm,
+            include_ism=include_ism,
+            include_baselines=include_baselines,
+        )
 
     click.echo("Outputs:")
     for name, path in outputs.items():
