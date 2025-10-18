@@ -13,6 +13,7 @@ import torch.nn as nn
 
 import esm
 from esm.modules import ContactPredictionHead, ESM1bLayerNorm, RobertaLMHead, TransformerLayer
+from minifold.utils.saesm import load_saesm_model_and_alphabet, resolve_saesm_checkpoint
 
 try:  # pragma: no cover - optional dependency
     import transformers.models.esm.modeling_esm as _transformers_esm_mod
@@ -363,6 +364,12 @@ def _load_model_and_alphabet_core_v2(model_data):
 
 
 def load_model_and_alphabet(model_name: str, use_flash: bool = True):
+    # Route SaESM aliases through the Hugging Face wrapper.
+    lower = model_name.lower()
+    resolved_saesm = resolve_saesm_checkpoint(model_name)
+    if "saesm" in lower or resolved_saesm != model_name:
+        return load_saesm_model_and_alphabet(resolved_saesm)
+
     resolved = _resolve_faesm_model_name(model_name)
     if resolved is not None:
         model = FlashEsmWrapper(resolved, use_flash=use_flash)
