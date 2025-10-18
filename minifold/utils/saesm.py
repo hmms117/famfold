@@ -19,8 +19,12 @@ SAESM_DEFAULT_CHECKPOINT = "chandar-lab/SaESM2_650M"
 SAESM_FAST_CHECKPOINT = "chandar-lab/SaESM2_35M"
 """Smaller SaESM checkpoint suited for rapid retrieval and RAG experiments."""
 
+SAAMPLIFY_BASE_CHECKPOINT = "chandar-lab/Saamplify_350M"
+"""Saamplify checkpoint aligned with SaESM trunks for ablation studies."""
+
 _SAESM_ALIAS_MAP = {
     "saesm2_650m": SAESM_DEFAULT_CHECKPOINT,
+    "saesm2650m": SAESM_DEFAULT_CHECKPOINT,
     "saesm2-650m": SAESM_DEFAULT_CHECKPOINT,
     "saesm2/650m": SAESM_DEFAULT_CHECKPOINT,
     "chandar-lab/saesm2_650m": SAESM_DEFAULT_CHECKPOINT,
@@ -30,6 +34,12 @@ _SAESM_ALIAS_MAP = {
     "saesm2/35m": SAESM_FAST_CHECKPOINT,
     "chandar-lab/saesm2_35m": SAESM_FAST_CHECKPOINT,
     SAESM_FAST_CHECKPOINT.lower(): SAESM_FAST_CHECKPOINT,
+    "saamplify_350m": SAAMPLIFY_BASE_CHECKPOINT,
+    "saamplify350m": SAAMPLIFY_BASE_CHECKPOINT,
+    "saamplify-350m": SAAMPLIFY_BASE_CHECKPOINT,
+    "saamplify/350m": SAAMPLIFY_BASE_CHECKPOINT,
+    "chandar-lab/saamplify_350m": SAAMPLIFY_BASE_CHECKPOINT,
+    SAAMPLIFY_BASE_CHECKPOINT.lower(): SAAMPLIFY_BASE_CHECKPOINT,
 }
 
 
@@ -210,5 +220,6 @@ __all__ = [
     "SaESMTrunk",
     "SAESM_DEFAULT_CHECKPOINT",
     "SAESM_FAST_CHECKPOINT",
+    "SAAMPLIFY_BASE_CHECKPOINT",
     "resolve_saesm_checkpoint",
 ]

@@ -1,3 +1,8 @@
 """Utilities for the homolog template hypothesis test benchmark."""
 
-from .config import BenchmarkConfig, TargetConfig, load_config  # noqa: F401
+from .config import (  # noqa: F401
+    BenchmarkConfig,
+    SequenceTrunkSettings,
+    TargetConfig,
+    load_config,
+)
