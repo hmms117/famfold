@@ -1,0 +1,6 @@
+{
+  "metric": "inner_product",
+  "dimension": 1280,
+  "trained": true,
+  "notes": "Placeholder FAISS index metadata for esm2 encoder."
+}

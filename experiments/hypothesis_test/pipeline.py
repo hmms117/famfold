@@ -4,12 +4,14 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Dict, Iterable, List, Optional
 
 from .baseline_runner import ExternalBaselineRunner
 from .config import BenchmarkConfig, Split, TargetConfig
 from .minifold_runner import MinifoldInferenceRunner
 from .template_features import TemplateFeatureStore
+from .retrieval_metrics import RetrievalMetricsReporter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +50,16 @@ class BenchmarkPipeline:
         ):
             if settings.enabled:
                 self._baseline_runners[name] = ExternalBaselineRunner(name, settings)
+
+        self._saesm2_runner = None
+        if config.minifold_saesm2.enabled:
+            self._saesm2_runner = MinifoldInferenceRunner(
+                config.minifold_saesm2, config.cache_dir
+            )
+
+        self._metrics_reporter = RetrievalMetricsReporter(
+            self.workspace / "manifests" / "hypothesis_test.duckdb"
+        )
 
         self._template_store = TemplateFeatureStore(self.workspace / "template_features")
 
@@ -153,6 +165,7 @@ class BenchmarkPipeline:
         include_templates: bool = False,
         include_faplm: bool = False,
         include_ism: bool = False,
+        include_saesm2: bool = False,
         include_baselines: bool = False,
     ) -> Dict[str, Path]:
         targets = list(self._resolve_targets(pilot=True))
@@ -198,6 +211,14 @@ class BenchmarkPipeline:
             if result is not None:
                 outputs["minifold_ism"] = result
 
+        if include_saesm2:
+            try:
+                outputs["minifold_saesm2"] = self.run_minifold_saesm2(
+                    targets, label="pilot_saesm2"
+                )
+            except (RuntimeError, ValueError, FileNotFoundError) as exc:
+                LOGGER.warning("SaESM2 Minifold run skipped: %s", exc)
+
         if include_baselines:
             outputs.update(self._run_baselines(targets, label_prefix="pilot"))
 
@@ -209,6 +230,7 @@ class BenchmarkPipeline:
         include_templates: bool = False,
         include_faplm: bool = False,
         include_ism: bool = False,
+        include_saesm2: bool = False,
         include_baselines: bool = False,
     ) -> Dict[str, Path]:
         targets = list(self._resolve_targets(splits=splits, pilot=False))
@@ -254,9 +276,42 @@ class BenchmarkPipeline:
             if result is not None:
                 outputs["minifold_ism"] = result
 
+        if include_saesm2:
+            try:
+                outputs["minifold_saesm2"] = self.run_minifold_saesm2(
+                    targets, label=f"full_saesm2_{manifest_name}"
+                )
+            except (RuntimeError, ValueError, FileNotFoundError) as exc:
+                LOGGER.warning("SaESM2 Minifold run skipped: %s", exc)
+
         if include_baselines:
             outputs.update(
                 self._run_baselines(targets, label_prefix=f"full_{manifest_name}")
             )
 
         return outputs
+
+    def run_minifold_saesm2(
+        self, targets: Iterable[TargetConfig], label: str
+    ) -> Path:
+        if self._saesm2_runner is None:
+            raise RuntimeError(
+                "SaESM2 Minifold run requested but disabled in configuration."
+            )
+
+        target_list = list(targets)
+        if not target_list:
+            raise ValueError("No targets provided for SaESM2 Minifold run.")
+
+        start_time = perf_counter()
+        result = self._saesm2_runner.run(target_list, self.workspace, label)
+        latency_ms = (perf_counter() - start_time) * 1000.0
+
+        try:
+            self._metrics_reporter.report(
+                label, "saesm2", latency_ms=latency_ms, baseline="ism"
+            )
+        except FileNotFoundError as exc:
+            LOGGER.warning("SaESM2 metrics reporting skipped: %s", exc)
+
+        return result

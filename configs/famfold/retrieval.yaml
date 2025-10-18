@@ -1,0 +1,37 @@
+# Retrieval configuration for FamilyFold Tier 1 pipelines.
+#
+# The structure mirrors the runtime registry used by the hypothesis-test
+# utilities: each encoder entry describes the checkpoint/tokenizer resources
+# alongside basic metadata that the retrieval stack consumes.
+#
+# Existing pipelines rely on the ESM-2 family as the default.  The ISM entry
+# provides backwards compatibility with the original invariant sequence model
+# trunk.  SaESM2 (650M) mirrors the ISM layout so downstream tooling can look
+# up the configuration without bespoke handling.
+retrievers:
+  esm2:
+    checkpoint: facebook/esm2_t36_3B_UR50D
+    tokenizer: facebook/esm2_t36_3B_UR50D
+    embedding_dim: 2560
+    layer_norm:
+      type: LayerNorm
+      eps: 1.0e-5
+  ism:
+    checkpoint: invariantlabs/ism-large
+    tokenizer: invariantlabs/ism-large
+    embedding_dim: 1280
+    layer_norm:
+      type: LayerNorm
+      eps: 1.0e-5
+  saesm2:
+    checkpoint: chandar-lab/SaESM2_650M
+    tokenizer: chandar-lab/SaESM2_650M
+    embedding_dim: 1280
+    layer_norm:
+      type: RMSNorm
+      eps: 1.0e-6
+faiss:
+  metric: inner_product
+  normalize: true
+  shards: 1
+  training_samples: 5000

@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import List
 
+import duckdb
 import pytest
 import torch
 
@@ -55,10 +56,10 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
 
     pipeline = BenchmarkPipeline(config, workspace=tmp_path)
 
-    outputs = pipeline.pilot(include_templates=True)
+    outputs = pipeline.pilot(include_templates=True, include_saesm2=True)
 
-    # The run should have invoked the Minifold CLI twice (base + templates).
-    assert len(fake_predict.calls) == 2
+    # The run should have invoked the Minifold CLI three times (base + templates + SaESM2).
+    assert len(fake_predict.calls) == 3
 
     # Confirm that FASTA input was materialised for the pilot run.
     fasta_path = tmp_path / "pilot_base" / "pilot_base.fasta"
@@ -78,6 +79,9 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
     assert base_output.exists()
     assert template_output.exists()
 
+    saesm2_output = outputs["minifold_saesm2"]
+    assert saesm2_output.exists()
+
     # Check that the CLI arguments propagated through to the Click command.
     for args in fake_predict.calls:
         assert "--token_per_batch" in args
@@ -88,6 +92,29 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
     # Ensure manifests were exported for auditing.
     manifest_path = tmp_path / "manifests" / "pilot.json"
     assert manifest_path.exists()
+
+    metrics_manifest = tmp_path / "manifests" / "hypothesis_test.duckdb"
+    assert metrics_manifest.exists()
+
+    with duckdb.connect(str(metrics_manifest)) as connection:
+        rows = connection.execute(
+            """
+            SELECT metric, value, baseline_value, delta
+            FROM retrieval_comparisons
+            WHERE namespace = 'saesm2'
+            """
+        ).fetchall()
+
+    assert rows
+    recorded_metrics = {metric: value for metric, value, _, _ in rows}
+    assert "recall_at_6" in recorded_metrics
+    assert "latency_ms" in recorded_metrics
+
+    baseline_values = {metric: baseline for metric, _, baseline, _ in rows if baseline is not None}
+    assert baseline_values["recall_at_6"] == pytest.approx(0.91, rel=1e-5)
+
+    deltas = {metric: delta for metric, _, _, delta in rows if delta is not None}
+    assert deltas["recall_at_6"] > 0
 
 
 @pytest.fixture()

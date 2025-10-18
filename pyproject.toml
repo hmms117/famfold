@@ -25,6 +25,7 @@ dependencies = [
     "click",
     "ml_collections",
     "einops",
+    "duckdb",
 ]
 
 [project.optional-dependencies]
