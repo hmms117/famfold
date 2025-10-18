@@ -12,7 +12,9 @@ from experiments.hypothesis_test.pipeline import BenchmarkPipeline
 from minifold.utils.saesm import (
     SAESM_DEFAULT_CHECKPOINT,
     SAESM_FAST_CHECKPOINT,
+    SaESMAlphabet,
     SaESMTrunk,
+    SaESMWrapper,
     resolve_saesm_checkpoint,
 )
 
@@ -170,6 +172,15 @@ class _DummySaESMTokenizer:
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
         }
 
+    def encode(self, sequence: str, add_special_tokens: bool = True) -> List[int]:
+        output = self(
+            sequence,
+            return_tensors="pt",
+            padding=False,
+            add_special_tokens=add_special_tokens,
+        )
+        return output["input_ids"].squeeze(0).tolist()
+
 
 class _DummySaESMModel(torch.nn.Module):
     def __init__(self) -> None:
@@ -177,7 +188,7 @@ class _DummySaESMModel(torch.nn.Module):
         self.config = type(
             "Config",
             (),
-            {"hidden_size": 3, "num_hidden_layers": 4},
+            {"hidden_size": 3, "num_hidden_layers": 4, "num_attention_heads": 2},
         )()
 
     def forward(
@@ -249,3 +260,47 @@ def test_saesm_trunk_embeddings_filter_special_tokens() -> None:
     assert not embeddings.residue_mask[0, 0]
     assert not embeddings.residue_mask[0, -1]
     assert embeddings.residue_mask[0, 1]
+
+
+def test_saesm_wrapper_matches_dummy_hidden_states() -> None:
+    tokenizer = _DummySaESMTokenizer()
+    model = _DummySaESMModel()
+
+    alphabet = SaESMAlphabet(tokenizer)
+    wrapper = SaESMWrapper(
+        checkpoint=SAESM_DEFAULT_CHECKPOINT,
+        tokenizer=tokenizer,
+        model=model,
+    )
+
+    seqs = ["AC", "W"]
+    encoded = [alphabet.encode(seq) for seq in seqs]
+    max_len = max(len(tokens) for tokens in encoded)
+    batch = torch.full((len(encoded), max_len), alphabet.padding_idx, dtype=torch.long)
+    for row, tokens in enumerate(encoded):
+        batch[row, : len(tokens)] = torch.tensor(tokens, dtype=torch.long)
+
+    outputs = wrapper(batch, repr_layers=[wrapper.num_layers], need_head_weights=True)
+
+    raw = model(
+        input_ids=batch,
+        attention_mask=batch.ne(alphabet.padding_idx),
+        output_hidden_states=True,
+        output_attentions=True,
+    )
+    expected_hidden = torch.nn.functional.layer_norm(
+        raw.hidden_states[wrapper.num_layers],
+        (model.config.hidden_size,),
+        eps=1e-5,
+    )
+
+    torch.testing.assert_close(outputs["representations"][wrapper.num_layers], expected_hidden)
+
+    attentions = outputs["attentions"]
+    assert attentions.shape == (
+        batch.shape[0],
+        batch.shape[1],
+        batch.shape[1],
+        wrapper.num_layers,
+        model.config.num_attention_heads,
+    )

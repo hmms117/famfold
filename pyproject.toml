@@ -15,6 +15,7 @@ dependencies = [
     "torch>=2.3.0",
     "fair-esm",
     "faesm>=0.1.1",
+    "transformers>=4.39.0",
     "biopython==1.81",
     "edit_distance",
     "pandas",
