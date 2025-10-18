@@ -11,5 +11,10 @@
     "enabled": true,
     "model_size": "12L",
     "token_per_batch": 512
+  },
+  "minifold_saesm2": {
+    "enabled": true,
+    "model_size": "12L",
+    "token_per_batch": 512
   }
 }
