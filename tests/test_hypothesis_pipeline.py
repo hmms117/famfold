@@ -9,8 +9,8 @@ import duckdb
 import pytest
 import torch
 
-from experiments.hypothesis_test.config import load_config
-from experiments.hypothesis_test.pipeline import BenchmarkPipeline
+from hypothesis_test.config import load_config
+from hypothesis_test.pipeline import BenchmarkPipeline
 from minifold.utils.saesm import (
     SAAMPLIFY_BASE_CHECKPOINT,
     SAESM_DEFAULT_CHECKPOINT,
@@ -103,7 +103,7 @@ def fake_predict(monkeypatch: pytest.MonkeyPatch) -> _FakePredictMain:
 
 
 def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict: _FakePredictMain) -> None:
-    config_path = Path(__file__).resolve().parents[1] / "experiments" / "hypothesis_test" / "example_config.json"
+    config_path = Path(__file__).resolve().parents[1] / "hypothesis_test" / "example_config.json"
     config = load_config(config_path)
 
     pipeline = BenchmarkPipeline(config, workspace=tmp_path)
