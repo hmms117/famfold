@@ -1,0 +1,13 @@
+# Length buckets used for batching and prior aggregation.
+# ``pad_to`` controls the feature tensor size; ``chunk`` toggles retrieval batch
+# splits for large families.
+buckets:
+  256:
+    pad_to: 256
+    chunk: 64
+  384:
+    pad_to: 384
+    chunk: 96
+  512:
+    pad_to: 512
+    chunk: 128

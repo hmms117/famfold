@@ -1,0 +1,10 @@
+# Global defaults for FamilyFold Tier 1 inference.
+#
+# These knobs seed the routing heuristics and feature builders. They should be
+# tuned per trunk as validation data becomes available.
+gamma_base: 0.7
+beta: 1.5
+alpha: 1.0
+k_neighbors: 6
+router_decay: 0.85
+max_templates: 8
