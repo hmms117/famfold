@@ -34,7 +34,9 @@ fast = [
 ]
 
 [tool.setuptools]
-packages = ["minifold"]
+packages = ["minifold", "hypothesis_test", "experiments"]
 
 [tool.setuptools.package-data]
 minifold = ["utils/stereo_chemical_props.txt"]
+hypothesis_test = ["example_config.json"]
+experiments = ["hypothesis_test/example_config.json"]
