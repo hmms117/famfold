@@ -11,6 +11,14 @@ from .configuration import (
     resolve_environment_layout,
     write_run_manifest,
 )
+from .template_prep import (
+    DEFAULT_BIN_EDGES,
+    DISTOGRAM_DIAGONAL_SENTINEL,
+    TemplateQualityError,
+    TemplateRecord,
+    distogram_from_coords,
+    prepare_template,
+)
 
 __all__ = [
     "DEFAULT_OPTIONAL_ENVIRONMENT_FILES",
@@ -22,5 +30,10 @@ __all__ = [
     "load_environment_from_setup",
     "resolve_environment_layout",
     "write_run_manifest",
+    "DEFAULT_BIN_EDGES",
+    "DISTOGRAM_DIAGONAL_SENTINEL",
+    "TemplateQualityError",
+    "TemplateRecord",
+    "distogram_from_coords",
+    "prepare_template",
 ]
-
