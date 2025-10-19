@@ -1,10 +1,11 @@
 import os
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import click
 import torch
+
 import torch.nn.functional as F
 import numpy as np
 from Bio import SeqIO
@@ -223,6 +224,12 @@ def prepare_input(seq, config, alphabet):
     default=3,
     help="Number of recycling iterations for the structure module (default: 3).",
 )
+@click.option(
+    "--template_overrides",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to a torch.save() file mapping FASTA record identifiers to template distograms.",
+)
 def predict(
     fasta: str,
     out_dir: str = "./minifold_predictions",
@@ -233,6 +240,7 @@ def predict(
     model_size: str = "48L",
     kernels: bool = False,
     num_recycling: int = 3,
+    template_overrides: Optional[str] = None,
 ) -> None:
     """Run predictions with Minifold."""
     # Set no grad
@@ -285,6 +293,20 @@ def predict(
     print("Load sequences...")
     batches = create_batches(fasta, token_per_batch)
 
+    # Load optional template overrides
+    overrides: Dict[str, Dict[str, torch.Tensor]] = {}
+    if template_overrides is not None:
+        overrides_raw = torch.load(template_overrides, map_location="cpu")
+        if isinstance(overrides_raw, dict):
+            overrides = {
+                str(key): {
+                    "distogram": torch.as_tensor(value.get("distogram", value)),
+                }
+                for key, value in overrides_raw.items()
+            }
+        else:
+            raise TypeError("Template overrides file must contain a dictionary mapping sequence identifiers to tensors.")
+
     # Predict
     print("Launching predictions...")
     for batch in tqdm(batches):
@@ -329,6 +351,47 @@ def predict(
             "mask": mask.to(device),
             "batch_of": {k: v.to(device) for k, v in batch_of.items()},
         }
+
+        if overrides:
+            template_batch = torch.zeros(
+                len(batch),
+                max_len,
+                max_len,
+                model.fold.disto_bins,
+                dtype=torch.float32,
+            )
+            any_template = False
+            for idx, record in enumerate(batch):
+                entry = overrides.get(str(record.id))
+                if entry is None:
+                    continue
+                dist_tensor = entry.get("distogram")
+                if dist_tensor is None:
+                    continue
+                dist_tensor = torch.as_tensor(dist_tensor, dtype=torch.float32)
+                if dist_tensor.ndim != 3:
+                    raise ValueError("Template distogram must be a rank-3 tensor (L, L, bins).")
+                template_len = dist_tensor.shape[0]
+                if dist_tensor.shape[1] != template_len:
+                    raise ValueError("Template distogram must have square pair dimensions.")
+                if dist_tensor.shape[2] != model.fold.disto_bins:
+                    raise ValueError(
+                        f"Template distogram expects {model.fold.disto_bins} bins but received {dist_tensor.shape[2]}."
+                    )
+                if template_len > max_len:
+                    raise ValueError(
+                        f"Template distogram length {template_len} exceeds padded batch length {max_len}."
+                    )
+                padded = F.pad(
+                    dist_tensor,
+                    (0, 0, 0, max_len - template_len, 0, max_len - template_len),
+                    value=0.0,
+                )
+                template_batch[idx] = padded
+                any_template = True
+
+            if any_template:
+                model_batch["template_distogram"] = template_batch.to(device)
 
         # Run predictions
         try:
