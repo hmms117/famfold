@@ -73,6 +73,19 @@ standard distogram pipeline, and export coordinates.
   2. Convert distograms to distances via shortest-path completion → classical
      MDS → few LBFGS steps.
   3. Enforce chirality and remove clashes; compute per-residue metrics.
+- **6C Flow-Matching Inference (requested)**: align Stage [06] with the
+  inference procedure described in [OpenReview 5zAde2jch7](https://openreview.net/pdf?id=5zAde2jch7).
+  1. Complete a focused literature review and internal design note that maps the
+     paper's inference stages (sampler schedule, conditioning signals, and
+     telemetry) onto FamilyFold's feature tensors and router metrics.
+  2. Introduce a dedicated `flow_matching` path in the inference module that can
+     reuse MiniFold features while swapping in the paper's sampler / update
+     steps. Keep configuration-driven toggles so we can stage roll-outs.
+  3. Extend telemetry (`logs/inference.jsonl`, router manifests) with the paper's
+     confidence metrics to enable parity checks during adoption.
+  4. Add regression tests or goldens that compare our implementation against the
+     reference behaviours reported in the paper once we reproduce their
+     checkpoints.
 
 ### Outputs
 - `inference/coords/jsonl/<qhash>.jsonl`
@@ -109,6 +122,8 @@ standard distogram pipeline, and export coordinates.
 2. Run MiniFold inference with deterministic seeds; log runtime per batch.
 3. Apply chirality and clash checks; store adjustments in telemetry.
 4. Emit per-sequence JSONL record and optional structure exports.
+5. Track Mode 6C adoption status (config flag, telemetry coverage, parity vs
+   paper baselines) in the manifests to smooth experimentation.
 
 ### Tier 2 / Tier 3 Notes
 - **Tier 2**: integrate optional recycle with uncertainty-aware prior decay for
