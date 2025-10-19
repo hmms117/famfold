@@ -58,6 +58,11 @@ def cli(log_level: str) -> None:
     is_flag=True,
     help="Run additional baseline predictors when enabled in the configuration.",
 )
+@click.option(
+    "--include-trunks",
+    is_flag=True,
+    help="Generate sequence trunk embeddings when enabled in the configuration.",
+)
 def run_command(
     config_path: Path,
     splits: Iterable[str],
@@ -67,6 +72,7 @@ def run_command(
     include_ism: bool,
     include_saesm2: bool,
     include_baselines: bool,
+    include_trunks: bool,
 ) -> None:
     """Execute Minifold inference for the requested dataset partitions."""
 
@@ -80,6 +86,7 @@ def run_command(
             include_ism=include_ism,
             include_saesm2=include_saesm2,
             include_baselines=include_baselines,
+            include_trunks=include_trunks,
         )
     else:
         split_choices = _parse_splits(splits)
@@ -90,6 +97,7 @@ def run_command(
             include_ism=include_ism,
             include_saesm2=include_saesm2,
             include_baselines=include_baselines,
+            include_trunks=include_trunks,
         )
 
     click.echo("Outputs:")

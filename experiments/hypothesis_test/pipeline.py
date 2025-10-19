@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional
 from .baseline_runner import ExternalBaselineRunner
 from .config import BenchmarkConfig, Split, TargetConfig
 from .minifold_runner import MinifoldInferenceRunner
+from .sequence_trunk_runner import SequenceTrunkRunner
 from .template_features import TemplateFeatureStore
 from .retrieval_metrics import RetrievalMetricsReporter
 
@@ -167,6 +168,7 @@ class BenchmarkPipeline:
         include_ism: bool = False,
         include_saesm2: bool = False,
         include_baselines: bool = False,
+        include_trunks: bool = False,
     ) -> Dict[str, Path]:
         targets = list(self._resolve_targets(pilot=True))
         manifest_path = self.workspace / "manifests" / "pilot.json"
@@ -222,6 +224,16 @@ class BenchmarkPipeline:
         if include_baselines:
             outputs.update(self._run_baselines(targets, label_prefix="pilot"))
 
+        if include_trunks:
+            outputs.update(
+                {
+                    f"sequence_trunk_{name}": runner.run(
+                        targets, self.workspace, f"pilot_trunk_{name}"
+                    )
+                    for name, runner in self._trunk_runners.items()
+                }
+            )
+
         return outputs
 
     def full(
@@ -232,6 +244,7 @@ class BenchmarkPipeline:
         include_ism: bool = False,
         include_saesm2: bool = False,
         include_baselines: bool = False,
+        include_trunks: bool = False,
     ) -> Dict[str, Path]:
         targets = list(self._resolve_targets(splits=splits, pilot=False))
         manifest_name = "_".join(split.value for split in splits) if splits else "all"
@@ -287,6 +300,16 @@ class BenchmarkPipeline:
         if include_baselines:
             outputs.update(
                 self._run_baselines(targets, label_prefix=f"full_{manifest_name}")
+            )
+
+        if include_trunks:
+            outputs.update(
+                {
+                    f"sequence_trunk_{name}": runner.run(
+                        targets, self.workspace, f"full_trunk_{manifest_name}_{name}"
+                    )
+                    for name, runner in self._trunk_runners.items()
+                }
             )
 
         return outputs

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 import duckdb
 import pytest
@@ -11,6 +12,7 @@ import torch
 from experiments.hypothesis_test.config import load_config
 from experiments.hypothesis_test.pipeline import BenchmarkPipeline
 from minifold.utils.saesm import (
+    SAAMPLIFY_BASE_CHECKPOINT,
     SAESM_DEFAULT_CHECKPOINT,
     SAESM_FAST_CHECKPOINT,
     SaESMAlphabet,
@@ -41,6 +43,56 @@ class _FakePredictMain:
 
     def reset(self) -> None:
         self.calls.clear()
+
+
+class _DummyTrunk:
+    def __init__(self, embed_dim: int = 3) -> None:
+        self.embed_dim = embed_dim
+        self.calls: List[List[str]] = []
+
+    def embed_sequences(self, sequences: List[str]) -> SaESMEmbeddings:
+        self.calls.append(list(sequences))
+
+        per_residue = []
+        per_sequence = []
+        input_ids = []
+        residue_mask = []
+
+        for batch_index, sequence in enumerate(sequences):
+            length = len(sequence)
+            if length == 0:
+                residue = torch.zeros(0, self.embed_dim)
+            else:
+                start = batch_index * 32
+                values = torch.arange(start, start + length * self.embed_dim, dtype=torch.float32)
+                residue = values.reshape(length, self.embed_dim)
+            per_residue.append(residue)
+            if residue.numel() == 0:
+                per_sequence.append(torch.zeros(self.embed_dim))
+            else:
+                per_sequence.append(residue.mean(dim=0))
+
+            token_count = length + 2
+            ids = torch.arange(token_count, dtype=torch.long)
+            mask = torch.ones(token_count, dtype=torch.bool)
+            mask[0] = False
+            mask[-1] = False
+            input_ids.append(ids)
+            residue_mask.append(mask)
+
+        max_tokens = max(tensor.numel() for tensor in input_ids)
+        padded_ids = torch.zeros(len(sequences), max_tokens, dtype=torch.long)
+        padded_mask = torch.zeros(len(sequences), max_tokens, dtype=torch.bool)
+        for idx, (ids, mask) in enumerate(zip(input_ids, residue_mask)):
+            padded_ids[idx, : ids.numel()] = ids
+            padded_mask[idx, : mask.numel()] = mask
+
+        return SaESMEmbeddings(
+            per_residue=per_residue,
+            per_sequence=torch.stack(per_sequence) if per_sequence else torch.empty(0, self.embed_dim),
+            input_ids=padded_ids,
+            residue_mask=padded_mask,
+        )
 
 
 @pytest.fixture()
@@ -264,6 +316,7 @@ def test_saesm_trunk_embeddings_filter_special_tokens() -> None:
 
     assert resolve_saesm_checkpoint("SaESM2-650M") == SAESM_DEFAULT_CHECKPOINT
     assert resolve_saesm_checkpoint("saesm2_35m") == SAESM_FAST_CHECKPOINT
+    assert resolve_saesm_checkpoint("Saamplify-350M") == SAAMPLIFY_BASE_CHECKPOINT
 
     assert len(embeddings.per_residue) == 2
     assert embeddings.per_residue[0].shape == (2, 3)

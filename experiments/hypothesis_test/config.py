@@ -140,6 +140,18 @@ class BaselineSettings:
 
 
 @dataclass
+class SequenceTrunkSettings:
+    """Configuration for running SaESM/Saamplify sequence trunk embeddings."""
+
+    enabled: bool = False
+    checkpoint: Optional[str] = None
+    batch_size: int = 8
+    torch_dtype: Optional[str] = None
+    device: Optional[str] = None
+    device_map: Optional[Union[str, Dict[str, object]]] = None
+
+
+@dataclass
 class BenchmarkConfig:
     """Top-level configuration for the homolog template benchmark."""
 
@@ -155,6 +167,7 @@ class BenchmarkConfig:
     esmfold: BaselineSettings = field(default_factory=BaselineSettings)
     boltz2: BaselineSettings = field(default_factory=BaselineSettings)
     alphafold2: BaselineSettings = field(default_factory=BaselineSettings)
+    sequence_trunks: Dict[str, SequenceTrunkSettings] = field(default_factory=dict)
 
     def get_targets(self, *splits: Split) -> List[TargetConfig]:
         """Return all targets belonging to the requested splits."""
@@ -228,6 +241,11 @@ def load_config(path: Path) -> BenchmarkConfig:
     boltz2 = BaselineSettings(**data.get("boltz2", {}))
     alphafold2 = BaselineSettings(**data.get("alphafold2", {}))
 
+    sequence_trunks_data = data.get("sequence_trunks", {})
+    sequence_trunks: Dict[str, SequenceTrunkSettings] = {}
+    for name, payload in sequence_trunks_data.items():
+        sequence_trunks[name] = SequenceTrunkSettings(**payload)
+
     pilot_subset_size = int(data.get("pilot_subset_size", 5))
 
     return BenchmarkConfig(
@@ -243,4 +261,5 @@ def load_config(path: Path) -> BenchmarkConfig:
         esmfold=esmfold,
         boltz2=boltz2,
         alphafold2=alphafold2,
+        sequence_trunks=sequence_trunks,
     )
