@@ -1,0 +1,8 @@
+# Path overrides for FamilyFold Stage 00 pipelines.
+#
+# All paths are relative to the repository root by default. Override them via
+# Hydra or environment-specific configuration if the data/cache roots live on a
+# shared filesystem or network mount.
+data_root: ./data
+cache_root: ./cache
+zarr_root: ./zarr

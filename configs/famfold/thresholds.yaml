@@ -1,0 +1,5 @@
+# Router thresholds for Stage 09 decisions.
+# Values represent entropy (in bits) thresholds applied to routed predictions.
+ACCEPT: 0.25
+REFINE: 0.35
+ESCALATE: 0.5

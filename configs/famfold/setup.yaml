@@ -1,0 +1,26 @@
+# Stage 00/09 Hydra configuration for FamilyFold pipelines.
+#
+# The defaults assume that configuration fragments live alongside this file.
+# Override ``setup.profiles.familyfold.environment.root`` (or select another
+# profile) when targeting a different trunk or experiment, e.g. ``proteinttt``.
+defaults:
+  - _self_
+
+setup:
+  default_profile: familyfold
+  profiles:
+    familyfold:
+      description: "FamilyFold Tier 1 defaults"
+      trunk: familyfold
+      environment:
+        root: .
+        required_files:
+          paths: paths.yaml
+          defaults: default.yaml
+          thresholds: thresholds.yaml
+          buckets: buckets.yaml
+        optional_files:
+          retrieval: retrieval.yaml
+      manifests:
+        directory: manifests
+        filename: run_manifest.json
