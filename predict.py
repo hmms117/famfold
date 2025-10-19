@@ -298,12 +298,20 @@ def predict(
     if template_overrides is not None:
         overrides_raw = torch.load(template_overrides, map_location="cpu")
         if isinstance(overrides_raw, dict):
-            overrides = {
-                str(key): {
-                    "distogram": torch.as_tensor(value.get("distogram", value)),
-                }
-                for key, value in overrides_raw.items()
-            }
+            processed: Dict[str, Dict[str, torch.Tensor]] = {}
+            for key, value in overrides_raw.items():
+                if isinstance(value, dict):
+                    dist = value.get("distogram", value)
+                elif isinstance(value, torch.Tensor):
+                    dist = value
+                else:
+                    raise TypeError(
+                        "Template override values must be either dictionaries or tensors."
+                    )
+
+                processed[str(key)] = {"distogram": torch.as_tensor(dist)}
+
+            overrides = processed
         else:
             raise TypeError("Template overrides file must contain a dictionary mapping sequence identifiers to tensors.")
 

@@ -16,8 +16,8 @@ Each sequence is stored as a single-entry FASTA file under `sequences/`. Metadat
 
 ## Usage
 
-1. Point the hypothesis test configuration at `data/benchmarks/hypothesis_test/targets.json`.
-2. Run `python -m experiments.hypothesis_test.cli run experiments/hypothesis_test/example_config.json --pilot` to validate the pilot ID/OOD mix (`ubiquitin_human` and `rpl41e_mj`).
+1. Point the hypothesis test configuration at `data/pretests/hypothesis_test/targets.json`.
+2. Run `python -m pretests.hypothesis_test.cli run pretests/hypothesis_test/example_config.json --pilot` to validate the pilot ID/OOD mix (`ubiquitin_human` and `rpl41e_mj`).
 3. Trigger a full sweep with `--split full_id` / `--split full_ood` or omit the flag to cover all five families.
 
 > **Note:** Structure coordinates are not vendored in this repository. The metadata includes PDB identifiers so structures can be retrieved via RCSB or EMDB when evaluating model accuracy.

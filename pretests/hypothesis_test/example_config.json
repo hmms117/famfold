@@ -1,7 +1,7 @@
 {
   "output_dir": "./hypothesis_test_outputs",
   "cache_dir": "./hypothesis_test_cache",
-  "targets_path": "../../data/benchmarks/hypothesis_test/targets.json",
+  "targets_path": "../../data/pretests/hypothesis_test/targets.json",
   "minifold_base": {
     "enabled": true,
     "model_size": "12L",

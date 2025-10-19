@@ -12,7 +12,7 @@ import duckdb
 _CACHE_ROOT = (
     Path(__file__).resolve().parents[2]
     / "data"
-    / "benchmarks"
+    / "pretests"
     / "hypothesis_test"
     / "caches"
 )
