@@ -163,6 +163,7 @@ class BenchmarkConfig:
     minifold_templates: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     minifold_faplm: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     minifold_ism: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
+    minifold_saesm2: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     esmfold: BaselineSettings = field(default_factory=BaselineSettings)
     boltz2: BaselineSettings = field(default_factory=BaselineSettings)
     alphafold2: BaselineSettings = field(default_factory=BaselineSettings)
@@ -235,6 +236,7 @@ def load_config(path: Path) -> BenchmarkConfig:
     minifold_templates = MinifoldRunSettings(**data.get("minifold_templates", {}))
     minifold_faplm = MinifoldRunSettings(**data.get("minifold_faplm", {}))
     minifold_ism = MinifoldRunSettings(**data.get("minifold_ism", {}))
+    minifold_saesm2 = MinifoldRunSettings(**data.get("minifold_saesm2", {}))
     esmfold = BaselineSettings(**data.get("esmfold", {}))
     boltz2 = BaselineSettings(**data.get("boltz2", {}))
     alphafold2 = BaselineSettings(**data.get("alphafold2", {}))
@@ -255,6 +257,7 @@ def load_config(path: Path) -> BenchmarkConfig:
         minifold_templates=minifold_templates,
         minifold_faplm=minifold_faplm,
         minifold_ism=minifold_ism,
+        minifold_saesm2=minifold_saesm2,
         esmfold=esmfold,
         boltz2=boltz2,
         alphafold2=alphafold2,

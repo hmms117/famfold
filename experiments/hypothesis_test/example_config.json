@@ -12,18 +12,9 @@
     "model_size": "12L",
     "token_per_batch": 512
   },
-  "sequence_trunks": {
-    "saamplify_350m": {
-      "enabled": false,
-      "checkpoint": "chandar-lab/Saamplify_350M",
-      "batch_size": 4,
-      "torch_dtype": "bfloat16"
-    },
-    "saesm2_650m": {
-      "enabled": false,
-      "checkpoint": "SaESM2_650M",
-      "batch_size": 2,
-      "torch_dtype": "bfloat16"
-    }
+  "minifold_saesm2": {
+    "enabled": true,
+    "model_size": "12L",
+    "token_per_batch": 512
   }
 }

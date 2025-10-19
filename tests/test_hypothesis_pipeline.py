@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List
 
+import duckdb
 import pytest
 import torch
 
@@ -14,8 +15,9 @@ from minifold.utils.saesm import (
     SAAMPLIFY_BASE_CHECKPOINT,
     SAESM_DEFAULT_CHECKPOINT,
     SAESM_FAST_CHECKPOINT,
+    SaESMAlphabet,
     SaESMTrunk,
-    SaESMEmbeddings,
+    SaESMWrapper,
     resolve_saesm_checkpoint,
 )
 
@@ -106,10 +108,10 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
 
     pipeline = BenchmarkPipeline(config, workspace=tmp_path)
 
-    outputs = pipeline.pilot(include_templates=True)
+    outputs = pipeline.pilot(include_templates=True, include_saesm2=True)
 
-    # The run should have invoked the Minifold CLI twice (base + templates).
-    assert len(fake_predict.calls) == 2
+    # The run should have invoked the Minifold CLI three times (base + templates + SaESM2).
+    assert len(fake_predict.calls) == 3
 
     # Confirm that FASTA input was materialised for the pilot run.
     fasta_path = tmp_path / "pilot_base" / "pilot_base.fasta"
@@ -129,6 +131,9 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
     assert base_output.exists()
     assert template_output.exists()
 
+    saesm2_output = outputs["minifold_saesm2"]
+    assert saesm2_output.exists()
+
     # Check that the CLI arguments propagated through to the Click command.
     for args in fake_predict.calls:
         assert "--token_per_batch" in args
@@ -139,6 +144,29 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
     # Ensure manifests were exported for auditing.
     manifest_path = tmp_path / "manifests" / "pilot.json"
     assert manifest_path.exists()
+
+    metrics_manifest = tmp_path / "manifests" / "hypothesis_test.duckdb"
+    assert metrics_manifest.exists()
+
+    with duckdb.connect(str(metrics_manifest)) as connection:
+        rows = connection.execute(
+            """
+            SELECT metric, value, baseline_value, delta
+            FROM retrieval_comparisons
+            WHERE namespace = 'saesm2'
+            """
+        ).fetchall()
+
+    assert rows
+    recorded_metrics = {metric: value for metric, value, _, _ in rows}
+    assert "recall_at_6" in recorded_metrics
+    assert "latency_ms" in recorded_metrics
+
+    baseline_values = {metric: baseline for metric, _, baseline, _ in rows if baseline is not None}
+    assert baseline_values["recall_at_6"] == pytest.approx(0.91, rel=1e-5)
+
+    deltas = {metric: delta for metric, _, _, delta in rows if delta is not None}
+    assert deltas["recall_at_6"] > 0
 
 
 @pytest.fixture()
@@ -223,6 +251,15 @@ class _DummySaESMTokenizer:
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
         }
 
+    def encode(self, sequence: str, add_special_tokens: bool = True) -> List[int]:
+        output = self(
+            sequence,
+            return_tensors="pt",
+            padding=False,
+            add_special_tokens=add_special_tokens,
+        )
+        return output["input_ids"].squeeze(0).tolist()
+
 
 class _DummySaESMModel(torch.nn.Module):
     def __init__(self) -> None:
@@ -230,7 +267,7 @@ class _DummySaESMModel(torch.nn.Module):
         self.config = type(
             "Config",
             (),
-            {"hidden_size": 3, "num_hidden_layers": 4},
+            {"hidden_size": 3, "num_hidden_layers": 4, "num_attention_heads": 2},
         )()
 
     def forward(
@@ -305,43 +342,45 @@ def test_saesm_trunk_embeddings_filter_special_tokens() -> None:
     assert embeddings.residue_mask[0, 1]
 
 
-def test_sequence_trunks_pipeline_exports_embeddings(
-    tmp_path: Path, fake_predict: _FakePredictMain, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_path = Path(__file__).resolve().parents[1] / "experiments" / "hypothesis_test" / "example_config.json"
-    config = load_config(config_path)
+def test_saesm_wrapper_matches_dummy_hidden_states() -> None:
+    tokenizer = _DummySaESMTokenizer()
+    model = _DummySaESMModel()
 
-    for settings in config.sequence_trunks.values():
-        settings.enabled = True
-        settings.batch_size = 2
+    alphabet = SaESMAlphabet(tokenizer)
+    wrapper = SaESMWrapper(
+        checkpoint=SAESM_DEFAULT_CHECKPOINT,
+        tokenizer=tokenizer,
+        model=model,
+    )
 
-    pipeline = BenchmarkPipeline(config, workspace=tmp_path)
+    seqs = ["AC", "W"]
+    encoded = [alphabet.encode(seq) for seq in seqs]
+    max_len = max(len(tokens) for tokens in encoded)
+    batch = torch.full((len(encoded), max_len), alphabet.padding_idx, dtype=torch.long)
+    for row, tokens in enumerate(encoded):
+        batch[row, : len(tokens)] = torch.tensor(tokens, dtype=torch.long)
 
-    stubs: Dict[str, _DummyTrunk] = {}
-    for name, runner in pipeline._trunk_runners.items():
-        stub = _DummyTrunk()
-        stubs[name] = stub
-        runner._trunk_factory = lambda stub=stub: stub  # type: ignore[attr-defined]
+    outputs = wrapper(batch, repr_layers=[wrapper.num_layers], need_head_weights=True)
 
-    outputs = pipeline.pilot(include_trunks=True)
+    raw = model(
+        input_ids=batch,
+        attention_mask=batch.ne(alphabet.padding_idx),
+        output_hidden_states=True,
+        output_attentions=True,
+    )
+    expected_hidden = torch.nn.functional.layer_norm(
+        raw.hidden_states[wrapper.num_layers],
+        (model.config.hidden_size,),
+        eps=1e-5,
+    )
 
-    pilot_targets = list(pipeline._resolve_targets(pilot=True))  # noqa: SLF001
-    expected_ids = {target.identifier for target in pilot_targets}
+    torch.testing.assert_close(outputs["representations"][wrapper.num_layers], expected_hidden)
 
-    for name, stub in stubs.items():
-        key = f"sequence_trunk_{name}"
-        assert key in outputs
-        run_dir = outputs[key]
-        embeddings_dir = run_dir / "embeddings"
-        assert embeddings_dir.exists()
-
-        files = list(embeddings_dir.glob("*.pt"))
-        assert len(files) == len(pilot_targets)
-
-        manifest_path = run_dir / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert expected_ids == {entry["id"] for entry in manifest}
-
-        sample = torch.load(files[0])
-        assert set(sample) == {"per_sequence", "per_residue", "input_ids", "residue_mask"}
-        assert stub.calls, "Stub trunk was not invoked"
+    attentions = outputs["attentions"]
+    assert attentions.shape == (
+        batch.shape[0],
+        batch.shape[1],
+        batch.shape[1],
+        wrapper.num_layers,
+        model.config.num_attention_heads,
+    )

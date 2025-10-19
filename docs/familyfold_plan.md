@@ -53,8 +53,10 @@ forward planning and are captured alongside the Tier 1 references below.
    pLDDT, and identity. (See [retrieval & priors](familyfold_tier1_retrieval.md)).
 5. **FeatureBuilder** — assemble MiniFold features with prior injection. (See
    [inference stack](familyfold_tier1_inference.md)).
-6. **MiniFold Fast Inference** — choose template warp vs distogram→coords,
-   export structures. (See [inference stack](familyfold_tier1_inference.md)).
+6. **MiniFold Fast Inference** — choose template warp vs distogram→coords, or
+   the requested flow-matching path from
+   [OpenReview 5zAde2jch7](https://openreview.net/pdf?id=5zAde2jch7); export
+   structures. (See [inference stack](familyfold_tier1_inference.md)).
 7. **Router** — ACCEPT/REFINE/ESCALATE decisions with uncertainty-aware decay.
    (See [inference stack](familyfold_tier1_inference.md)).
 8. **Homolog Co-Prediction** — share priors across ≥85% identity clusters (Tier 1

@@ -2,7 +2,7 @@ task: minifold
 
 data:
   data_dir: ""
-  esm_model_name: esm2_t36_3B_UR50D
+  esm_model_name: chandar-lab/SaESM2_650M
   esm_cache_path: ""
   batch_size: 4
   num_workers: 8
@@ -10,7 +10,7 @@ data:
   max_length: 256
 
 model:
-  esm_model_name: esm2_t36_3B_UR50D
+  esm_model_name: chandar-lab/SaESM2_650M
   num_blocks: 48
   num_recycling: 3
   max_dist: 25

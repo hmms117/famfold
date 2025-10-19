@@ -49,6 +49,11 @@ def cli(log_level: str) -> None:
     help="Run the Minifold variant configured for ISM when enabled.",
 )
 @click.option(
+    "--include-saesm2",
+    is_flag=True,
+    help="Run the Minifold variant configured for SaESM2 when enabled.",
+)
+@click.option(
     "--include-baselines",
     is_flag=True,
     help="Run additional baseline predictors when enabled in the configuration.",
@@ -65,6 +70,7 @@ def run_command(
     include_templates: bool,
     include_faplm: bool,
     include_ism: bool,
+    include_saesm2: bool,
     include_baselines: bool,
     include_trunks: bool,
 ) -> None:
@@ -78,6 +84,7 @@ def run_command(
             include_templates=include_templates,
             include_faplm=include_faplm,
             include_ism=include_ism,
+            include_saesm2=include_saesm2,
             include_baselines=include_baselines,
             include_trunks=include_trunks,
         )
@@ -88,6 +95,7 @@ def run_command(
             include_templates=include_templates,
             include_faplm=include_faplm,
             include_ism=include_ism,
+            include_saesm2=include_saesm2,
             include_baselines=include_baselines,
             include_trunks=include_trunks,
         )

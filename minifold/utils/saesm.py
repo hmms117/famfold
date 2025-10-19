@@ -8,7 +8,7 @@ wrappers used throughout MiniFold.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -215,11 +215,190 @@ class SaESMTrunk(nn.Module):
         return self.embed_sequences([sequence])
 
 
+class SaESMAlphabet:
+    """Adapter that exposes the Hugging Face tokenizer via the ESM alphabet API."""
+
+    prepend_bos: bool = True
+    append_eos: bool = True
+
+    def __init__(self, tokenizer) -> None:
+        self._tokenizer = tokenizer
+
+        self.padding_idx = tokenizer.pad_token_id
+        self.mask_idx = tokenizer.mask_token_id
+        self.cls_idx = tokenizer.cls_token_id
+        self.eos_idx = tokenizer.eos_token_id
+
+        missing = {
+            name: getattr(self, name)
+            for name in ("padding_idx", "mask_idx", "cls_idx", "eos_idx")
+            if getattr(self, name) is None
+        }
+        if missing:
+            raise ValueError(
+                "The provided tokenizer is missing required SaESM special tokens: "
+                + ", ".join(missing.keys())
+            )
+
+    def encode(self, sequence: str) -> Sequence[int]:
+        return self._tokenizer.encode(sequence, add_special_tokens=True)
+
+    def __len__(self) -> int:  # pragma: no cover - trivial
+        return self._tokenizer.vocab_size
+
+
+class SaESMWrapper(nn.Module):
+    """MiniFold-compatible wrapper around Hugging Face SaESM checkpoints."""
+
+    def __init__(
+        self,
+        checkpoint: str = SAESM_DEFAULT_CHECKPOINT,
+        *,
+        tokenizer=None,
+        model=None,
+        torch_dtype: str | torch.dtype = "auto",
+        device_map: Optional[str | Dict[str, int]] = None,
+    ) -> None:
+        super().__init__()
+
+        resolved = resolve_saesm_checkpoint(checkpoint)
+        if tokenizer is None or model is None:
+            try:
+                from transformers import AutoModelForMaskedLM, AutoTokenizer
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise ImportError(
+                    "transformers is required to load SaESM checkpoints. "
+                    "Install it via `pip install transformers`."
+                ) from exc
+
+            if tokenizer is None:
+                tokenizer = AutoTokenizer.from_pretrained(resolved)
+            if model is None:
+                model = AutoModelForMaskedLM.from_pretrained(
+                    resolved,
+                    torch_dtype=torch_dtype,
+                    device_map=device_map,
+                )
+
+        self.checkpoint = resolved
+        self.tokenizer = tokenizer
+        self.model = model
+
+        self.embed_dim = getattr(model.config, "hidden_size")
+        self.attention_heads = getattr(model.config, "num_attention_heads", 0)
+        self.num_layers = getattr(model.config, "num_hidden_layers", 0)
+
+        self.pad_idx = getattr(tokenizer, "pad_token_id", None)
+        self.mask_idx = getattr(tokenizer, "mask_token_id", None)
+        self.cls_idx = getattr(tokenizer, "cls_token_id", None)
+        self.eos_idx = getattr(tokenizer, "eos_token_id", None)
+
+        missing = {
+            name: getattr(self, name)
+            for name in ("pad_idx", "mask_idx", "cls_idx", "eos_idx")
+            if getattr(self, name) is None
+        }
+        if missing:
+            raise ValueError(
+                "The provided tokenizer is missing required SaESM special tokens: "
+                + ", ".join(missing.keys())
+            )
+
+        # Align with MiniFold's expectation that representations are mean-centred.
+        self._embedding_norm = nn.LayerNorm(self.embed_dim, elementwise_affine=False)
+
+        self.esm = getattr(model, "esm", model)
+        self.lm_head = getattr(model, "lm_head", nn.Identity())
+        self.contact_head = getattr(self.esm, "contact_head", None)
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        repr_layers: Optional[Iterable[int]] = None,
+        need_head_weights: bool = False,
+        return_contacts: bool = False,
+    ) -> dict:
+        if return_contacts:
+            need_head_weights = True
+
+        repr_layers = tuple(repr_layers or ())
+        output_hidden_states = bool(repr_layers)
+
+        attention_mask = tokens.ne(self.pad_idx)
+        model_kwargs = {
+            "input_ids": tokens,
+            "attention_mask": attention_mask,
+            "output_attentions": need_head_weights,
+            "output_hidden_states": output_hidden_states,
+            "return_dict": True,
+        }
+        try:
+            outputs = self.model(**model_kwargs)
+        except TypeError:  # pragma: no cover - legacy HF compatibility
+            model_kwargs.pop("return_dict", None)
+            outputs = self.model(**model_kwargs)
+
+        result: Dict[str, object] = {
+            "logits": self.lm_head(outputs.last_hidden_state),
+            "representations": {},
+        }
+
+        if output_hidden_states and outputs.hidden_states is not None:
+            hidden_states = list(outputs.hidden_states)
+            for layer_idx in repr_layers:
+                if 0 <= layer_idx < len(hidden_states):
+                    result["representations"][layer_idx] = self._embedding_norm(
+                        hidden_states[layer_idx]
+                    )
+
+        if need_head_weights:
+            attentions = outputs.attentions
+            if attentions is None:
+                raise RuntimeError(
+                    "Attention weights requested from SaESM but none were returned."
+                )
+            stacked = torch.stack(attentions, dim=1)  # (B, L, H, S, S)
+            stacked = stacked.permute(0, 3, 4, 1, 2).contiguous()
+            result["attentions"] = stacked
+
+            if return_contacts:
+                if self.contact_head is None:
+                    raise RuntimeError(
+                        "SaESM contact head unavailable; cannot return contacts."
+                    )
+                result["contacts"] = self.contact_head(tokens, stacked)
+
+        return result
+
+
+def load_saesm_model_and_alphabet(
+    checkpoint: str,
+    *,
+    tokenizer=None,
+    model=None,
+    torch_dtype: str | torch.dtype = "auto",
+    device_map: Optional[str | Dict[str, int]] = None,
+):
+    """Return a MiniFold-compatible SaESM model and alphabet wrapper."""
+
+    wrapper = SaESMWrapper(
+        checkpoint=checkpoint,
+        tokenizer=tokenizer,
+        model=model,
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+    )
+    alphabet = SaESMAlphabet(wrapper.tokenizer)
+    return wrapper, alphabet
+
+
 __all__ = [
-    "SaESMEmbeddings",
-    "SaESMTrunk",
     "SAESM_DEFAULT_CHECKPOINT",
     "SAESM_FAST_CHECKPOINT",
-    "SAAMPLIFY_BASE_CHECKPOINT",
+    "SaESMAlphabet",
+    "SaESMEmbeddings",
+    "SaESMTrunk",
+    "SaESMWrapper",
+    "load_saesm_model_and_alphabet",
     "resolve_saesm_checkpoint",
 ]

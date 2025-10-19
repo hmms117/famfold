@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
@@ -130,7 +132,14 @@ class FoldingTrunk(nn.Module):
         torch.nn.init.zeros_(self.seq_to_pair.o_proj.weight)
         torch.nn.init.zeros_(self.seq_to_pair.o_proj.bias)
 
-    def forward(self, s_s, s_z, mask, num_recycling=0):
+    def forward(
+        self,
+        s_s,
+        s_z,
+        mask,
+        num_recycling=0,
+        template_distogram: Optional[torch.Tensor] = None,
+    ):
         """
         Inputs:
           s_s_0:     B x L x C            tensor of sequence features
@@ -164,7 +173,10 @@ class FoldingTrunk(nn.Module):
 
         # Initialize binned distance
         shape = tuple(s_z.shape[:3]) + (self.disto_bins,)
-        dists = torch.zeros(shape, device=s_z.device, dtype=s_z.dtype)
+        if template_distogram is not None:
+            dists = template_distogram.to(device=s_z.device, dtype=s_z.dtype)
+        else:
+            dists = torch.zeros(shape, device=s_z.device, dtype=s_z.dtype)
 
         # Perform folding rounds
         for i in range(num_recycling + 1):
@@ -295,6 +307,7 @@ class MiniFoldModel(nn.Module):
             s_z,
             mask=batch["mask"],
             num_recycling=num_recycling,
+            template_distogram=batch.get("template_distogram"),
         )
 
         # Prepare output

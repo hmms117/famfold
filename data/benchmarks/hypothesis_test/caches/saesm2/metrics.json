@@ -1,0 +1,5 @@
+{
+  "recall_at_6": 0.94,
+  "mean_identity": 0.68,
+  "latency_ms": 98.0
+}
