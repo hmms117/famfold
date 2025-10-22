@@ -292,6 +292,16 @@ class MiniFoldModel(nn.Module):
             lm_out = self.lm(batch["seq"], repr_layers=[idx], need_head_weights=True)
             s_s = lm_out.pop("representations")[idx]
 
+        target_len = batch["mask"].shape[1]
+        if s_s.shape[1] != target_len:
+            trim = s_s.shape[1] - target_len
+            start = trim // 2
+            end = s_s.shape[1] - (trim - start)
+            s_s = s_s[:, start:end, ...]
+            lm_attn = lm_out.get("attentions")
+            if lm_attn is not None:
+                lm_out["attentions"] = lm_attn[:, start:end, start:end, ...]
+
         # Compute sequence embeddings
         s_s = self.fc_s(s_s)
 

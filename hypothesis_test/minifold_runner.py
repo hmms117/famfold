@@ -11,6 +11,10 @@ from .config import MinifoldRunSettings, TargetConfig
 
 LOGGER = logging.getLogger(__name__)
 
+_HF_CACHE_ROOT = "/var/tmp/hf_cache"
+os.environ["HF_HOME"] = _HF_CACHE_ROOT
+os.environ["TRANSFORMERS_CACHE"] = _HF_CACHE_ROOT
+
 
 @contextmanager
 def _temporary_environment(updates: Dict[str, str]):

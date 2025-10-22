@@ -1,20 +1,49 @@
 {
   "output_dir": "./hypothesis_test_outputs",
-  "cache_dir": "./hypothesis_test_cache",
+  "cache_dir": "/var/tmp/checkpoints",
   "targets_path": "../data/benchmarks/hypothesis_test/targets.json",
   "minifold_base": {
     "enabled": true,
     "model_size": "12L",
-    "token_per_batch": 512
+    "token_per_batch": 512,
+    "checkpoint": "/var/tmp/checkpoints/minifold_12L.ckpt"
   },
   "minifold_templates": {
     "enabled": true,
     "model_size": "12L",
-    "token_per_batch": 512
+    "token_per_batch": 512,
+    "checkpoint": "/var/tmp/checkpoints/minifold_12L.ckpt"
+  },
+  "minifold_faplm": {
+    "enabled": true,
+    "model_size": "12L",
+    "token_per_batch": 384,
+    "checkpoint": "/var/tmp/checkpoints/minifold_12L.ckpt"
+  },
+  "minifold_ism": {
+    "enabled": true,
+    "model_size": "12L",
+    "token_per_batch": 384,
+    "checkpoint": "/var/tmp/checkpoints/minifold_12L.ckpt"
   },
   "minifold_saesm2": {
     "enabled": true,
     "model_size": "12L",
-    "token_per_batch": 512
+    "token_per_batch": 512,
+    "checkpoint": "/var/tmp/checkpoints/minifold_12L.ckpt"
+  },
+  "minifold_baselines": {
+    "minifold_12l": {
+      "enabled": true,
+      "model_size": "12L",
+      "token_per_batch": 512,
+      "checkpoint": "/var/tmp/checkpoints/minifold_12L.ckpt"
+    },
+    "minifold_48l": {
+      "enabled": true,
+      "model_size": "48L",
+      "token_per_batch": 512,
+      "checkpoint": "/var/tmp/checkpoints/minifold_48L.ckpt"
+    }
   }
 }

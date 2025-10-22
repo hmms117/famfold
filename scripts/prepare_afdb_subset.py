@@ -25,6 +25,11 @@ from urllib.parse import urlparse
 import requests
 
 
+_HF_CACHE_ROOT = "/var/tmp/hf_cache"
+os.environ["HF_HOME"] = _HF_CACHE_ROOT
+os.environ["TRANSFORMERS_CACHE"] = _HF_CACHE_ROOT
+
+
 DEFAULT_DOWNLOAD_DIR = Path("data/afdb_cache")
 DEMO_DATA_DIR = Path("data/afdb_demo")
 SAMPLE_SCRIPT = Path("scripts/sample_mmseqs_clusters.py")

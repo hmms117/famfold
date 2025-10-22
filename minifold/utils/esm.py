@@ -7,6 +7,9 @@ import warnings
 import re
 import urllib
 from pathlib import Path
+import os
+
+import logging
 
 import torch
 import torch.nn as nn
@@ -14,6 +17,12 @@ import torch.nn as nn
 import esm
 from esm.modules import ContactPredictionHead, ESM1bLayerNorm, RobertaLMHead, TransformerLayer
 from minifold.utils.saesm import load_saesm_model_and_alphabet, resolve_saesm_checkpoint
+
+_HF_CACHE_ROOT = "/var/tmp/hf_cache"
+os.environ["HF_HOME"] = _HF_CACHE_ROOT
+os.environ["TRANSFORMERS_CACHE"] = _HF_CACHE_ROOT
+
+LOGGER = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
     import transformers.models.esm.modeling_esm as _transformers_esm_mod
@@ -26,7 +35,52 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 try:  # pragma: no cover - optional dependency
+    import faesm.esm as _faesm_mod
     from faesm.esm import FAEsmForMaskedLM
+
+    try:  # pragma: no cover - compatibility shim for older faesm releases
+        from transformers.models.esm.modeling_esm import (
+            EsmRotaryEmbedding as _FallbackRotary,
+            EsmEmbeddings as _FallbackEmbeddings,
+        )
+
+        _orig_hf_forward = _FallbackEmbeddings.forward
+        if "past_key_values_length" not in _orig_hf_forward.__code__.co_varnames:
+
+            def _patched_hf_forward(
+                self,
+                input_ids,
+                token_type_ids=None,
+                position_ids=None,
+                inputs_embeds=None,
+                past_key_values_length=None,
+                **unused_kwargs,
+            ):
+                return _orig_hf_forward(
+                    self,
+                    input_ids,
+                    token_type_ids=token_type_ids,
+                    position_ids=position_ids,
+                    inputs_embeds=inputs_embeds,
+                )
+
+            _FallbackEmbeddings.forward = _patched_hf_forward
+
+        if not hasattr(_faesm_mod, "FAEsmRotaryEmbedding"):
+            _faesm_mod.FAEsmRotaryEmbedding = _FallbackRotary
+
+        if hasattr(_faesm_mod, "FAEsmEmbeddings"):
+            _orig_forward = _faesm_mod.FAEsmEmbeddings.forward
+
+            if "past_key_values_length" not in getattr(_orig_forward, "__code__", _FallbackEmbeddings.forward.__code__).co_varnames:
+
+                def _patched_forward(self, input_ids, *unused_args, **unused_kwargs):
+                    # ``faesm`` embeddings ignore the arguments that later ``transformers`` versions pass.
+                    return _orig_forward(self, input_ids)
+
+                _faesm_mod.FAEsmEmbeddings.forward = _patched_forward
+    except Exception:  # pragma: no cover - best-effort guard
+        pass
 
     _FAESM_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
@@ -34,12 +88,62 @@ except ImportError:  # pragma: no cover - optional dependency
     _FAESM_AVAILABLE = False
 
 
-FAESM_MODEL_ALIASES = {
-    "esm2_t36_3B_UR50D": "facebook/esm2_t36_3B_UR50D",
-    "faesm_t36_3B_UR50D": "facebook/esm2_t36_3B_UR50D",
-    "faesm_t36_3b_ur50d": "facebook/esm2_t36_3B_UR50D",
-    "faesm/esm2_t36_3B_UR50D": "facebook/esm2_t36_3B_UR50D",
-}
+def _patch_hf_esm_embeddings() -> None:
+    try:
+        from transformers.models.esm.modeling_esm import EsmEmbeddings as _HfEsmEmbeddings
+
+        if "past_key_values_length" in _HfEsmEmbeddings.forward.__code__.co_varnames:
+            return
+
+        _orig = _HfEsmEmbeddings.forward
+
+        def _patched(
+            self,
+            input_ids=None,
+            attention_mask=None,
+            position_ids=None,
+            inputs_embeds=None,
+            past_key_values_length=None,
+            **unused_kwargs,
+        ):
+            return _orig(
+                self,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
+            )
+
+        _HfEsmEmbeddings.forward = _patched
+    except Exception:  # pragma: no cover - defensive guard
+        pass
+
+
+def _patch_faesm_embeddings() -> None:
+    try:
+        import faesm.esm as _faesm_mod
+
+        if not hasattr(_faesm_mod, "FAEsmEmbeddings"):
+            return
+
+        _orig = _faesm_mod.FAEsmEmbeddings.forward
+
+        if "past_key_values_length" in getattr(_orig, "__code__", _orig).__code__.co_varnames:
+            return
+
+        def _patched(self, input_ids, *unused_args, past_key_values_length=None, **unused_kwargs):
+            return _orig(self, input_ids)
+
+        _faesm_mod.FAEsmEmbeddings.forward = _patched
+    except Exception:  # pragma: no cover - defensive guard
+        pass
+
+
+_patch_hf_esm_embeddings()
+_patch_faesm_embeddings()
+
+
+FAESM_MODEL_ALIASES = {}
 
 
 def _resolve_faesm_model_name(model_name: str) -> Optional[str]:
@@ -48,8 +152,6 @@ def _resolve_faesm_model_name(model_name: str) -> Optional[str]:
     lower = model_name.lower()
     if lower in FAESM_MODEL_ALIASES:
         return FAESM_MODEL_ALIASES[lower]
-    if model_name.startswith("facebook/"):
-        return model_name
     return None
 
 
@@ -289,10 +391,11 @@ class ESM2(nn.Module):
             if padding_mask is not None:
                 attention_mask = 1 - padding_mask.type_as(attentions)
                 attention_mask = attention_mask.unsqueeze(1) * attention_mask.unsqueeze(2)
+                attention_mask = attention_mask.unsqueeze(-1).unsqueeze(-1)
                 if self.training:
-                    attentions = attentions * attention_mask[:, None, None, :, :]
+                    attentions = attentions * attention_mask
                 else:
-                    attentions *= attention_mask[:, None, None, :, :]
+                    attentions *= attention_mask
             result["attentions"] = attentions
             if return_contacts:
                 contacts = self.contact_head(tokens, attentions)
@@ -320,7 +423,8 @@ def load_hub_workaround(url):
 
 
 def load_regression_hub(model_name):
-    url = f"https://dl.fbaipublicfiles.com/fair-esm/regression/{model_name}-contact-regression.pt"
+    hub_name = model_name.replace("facebook/", "")
+    url = f"https://dl.fbaipublicfiles.com/fair-esm/regression/{hub_name}-contact-regression.pt"
     regression_data = load_hub_workaround(url)
     return regression_data
 
@@ -332,10 +436,11 @@ def _has_regression_weights(model_name):
 
 
 def _download_model_and_regression_data(model_name):
-    url = f"https://dl.fbaipublicfiles.com/fair-esm/models/{model_name}.pt"
+    hub_name = model_name.replace("facebook/", "")
+    url = f"https://dl.fbaipublicfiles.com/fair-esm/models/{hub_name}.pt"
     model_data = load_hub_workaround(url)
-    if _has_regression_weights(model_name):
-        regression_data = load_regression_hub(model_name)
+    if _has_regression_weights(hub_name):
+        regression_data = load_regression_hub(hub_name)
     else:
         regression_data = None
     return model_data, regression_data
@@ -368,14 +473,21 @@ def load_model_and_alphabet(model_name: str, use_flash: bool = True):
     lower = model_name.lower()
     resolved_saesm = resolve_saesm_checkpoint(model_name)
     if "saesm" in lower or resolved_saesm != model_name:
+        LOGGER.info("Loading SaESM backbone via %s", resolved_saesm)
         return load_saesm_model_and_alphabet(resolved_saesm)
 
     resolved = _resolve_faesm_model_name(model_name)
     if resolved is not None:
-        model = FlashEsmWrapper(resolved, use_flash=use_flash)
-        alphabet = FlashAlphabet(model.tokenizer)
-        return model, alphabet
+        LOGGER.info("Loading ESM backbone via faesm wrapper: %s (flash_attn=False)", resolved)
+        try:
+            model = FlashEsmWrapper(resolved, use_flash=False)
+        except Exception as exc:
+            LOGGER.warning("Failed to initialise faesm wrapper for %s: %s; falling back to transformers checkpoint", resolved, exc)
+        else:
+            alphabet = FlashAlphabet(model.tokenizer)
+            return model, alphabet
 
+    LOGGER.info("Loading ESM backbone via transformers checkpoint %s", model_name)
     model_data, regression_data = _download_model_and_regression_data(model_name)
 
     if regression_data is not None:

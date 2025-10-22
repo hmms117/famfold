@@ -3,7 +3,7 @@ task: minifold
 data:
   data_dir: ""
   esm_model_name: chandar-lab/SaESM2_650M
-  esm_cache_path: ""
+  esm_cache_path: /var/tmp/checkpoints
   batch_size: 4
   num_workers: 8
   samples_per_epoch: 1000000
@@ -26,3 +26,4 @@ trainer:
   gradient_clip_val: 1.5
   val_check_interval: 0.25
   accumulate_grad_batches: 4
+  default_root_dir: /var/tmp/famfold/checkpoints

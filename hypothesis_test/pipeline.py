@@ -58,6 +58,13 @@ class BenchmarkPipeline:
                 config.minifold_saesm2, config.cache_dir
             )
 
+        self._minifold_baseline_runners: Dict[str, MinifoldInferenceRunner] = {}
+        for name, settings in config.minifold_baselines.items():
+            if settings.enabled:
+                self._minifold_baseline_runners[name] = MinifoldInferenceRunner(
+                    settings, config.cache_dir
+                )
+
         self._metrics_reporter = RetrievalMetricsReporter(
             self.workspace / "manifests" / "hypothesis_test.duckdb"
         )
@@ -144,6 +151,26 @@ class BenchmarkPipeline:
                 LOGGER.warning("Baseline '%s' failed: %s", name, exc)
         return outputs
 
+    def _run_minifold_baselines(
+        self, targets: List[TargetConfig], label_prefix: str
+    ) -> Dict[str, Path]:
+        outputs: Dict[str, Path] = {}
+        if not self._minifold_baseline_runners:
+            LOGGER.warning(
+                "Minifold baselines requested but none are enabled in the configuration."
+            )
+            return outputs
+
+        for name, runner in self._minifold_baseline_runners.items():
+            run_label = f"{label_prefix}_{name}"
+            try:
+                outputs[f"minifold_baseline_{name}"] = runner.run(
+                    targets, self.workspace, run_label
+                )
+            except RuntimeError as exc:
+                LOGGER.warning("Minifold baseline '%s' failed: %s", name, exc)
+        return outputs
+
     def export_manifest(self, path: Path, targets: Iterable[TargetConfig]) -> None:
         manifest = []
         for target in targets:
@@ -223,6 +250,7 @@ class BenchmarkPipeline:
 
         if include_baselines:
             outputs.update(self._run_baselines(targets, label_prefix="pilot"))
+            outputs.update(self._run_minifold_baselines(targets, label_prefix="pilot"))
 
         if include_trunks:
             outputs.update(
@@ -300,6 +328,11 @@ class BenchmarkPipeline:
         if include_baselines:
             outputs.update(
                 self._run_baselines(targets, label_prefix=f"full_{manifest_name}")
+            )
+            outputs.update(
+                self._run_minifold_baselines(
+                    targets, label_prefix=f"full_{manifest_name}"
+                )
             )
 
         if include_trunks:

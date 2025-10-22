@@ -288,6 +288,13 @@ class SaESMWrapper(nn.Module):
         self.attention_heads = getattr(model.config, "num_attention_heads", 0)
         self.num_layers = getattr(model.config, "num_hidden_layers", 0)
 
+        set_attn_impl = getattr(self.model, "set_attn_implementation", None)
+        if callable(set_attn_impl):
+            try:
+                set_attn_impl("eager")
+            except Exception:
+                pass
+
         self.pad_idx = getattr(tokenizer, "pad_token_id", None)
         self.mask_idx = getattr(tokenizer, "mask_token_id", None)
         self.cls_idx = getattr(tokenizer, "cls_token_id", None)
@@ -338,10 +345,12 @@ class SaESMWrapper(nn.Module):
             model_kwargs.pop("return_dict", None)
             outputs = self.model(**model_kwargs)
 
-        result: Dict[str, object] = {
-            "logits": self.lm_head(outputs.last_hidden_state),
-            "representations": {},
-        }
+        if hasattr(outputs, "logits") and outputs.logits is not None:
+            logits = outputs.logits
+        else:
+            logits = self.lm_head(outputs.last_hidden_state)
+
+        result: Dict[str, object] = {"logits": logits, "representations": {}}
 
         if output_hidden_states and outputs.hidden_states is not None:
             hidden_states = list(outputs.hidden_states)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import statistics
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List
@@ -134,12 +136,16 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
     saesm2_output = outputs["minifold_saesm2"]
     assert saesm2_output.exists()
 
+    call_map = {Path(args[0]).parent.name: args for args in fake_predict.calls}
+
     # Check that the CLI arguments propagated through to the Click command.
-    for args in fake_predict.calls:
+    for args in call_map.values():
         assert "--token_per_batch" in args
         assert args[args.index("--token_per_batch") + 1] == "512"
         assert "--model_size" in args
         assert args[args.index("--model_size") + 1] == "12L"
+        assert "--checkpoint" in args
+        assert args[args.index("--checkpoint") + 1] == "/var/tmp/checkpoints/minifold_12L.ckpt"
 
     # Ensure manifests were exported for auditing.
     manifest_path = tmp_path / "manifests" / "pilot.json"
@@ -172,6 +178,73 @@ def test_pilot_pipeline_runs_minifold_and_templates(tmp_path: Path, fake_predict
 @pytest.fixture()
 def patched_autocast(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("torch.autocast", lambda *_, **__: nullcontext())
+
+
+def test_pilot_pipeline_runs_minifold_baselines(tmp_path: Path, fake_predict: _FakePredictMain) -> None:
+    config_path = Path(__file__).resolve().parents[1] / "hypothesis_test" / "example_config.json"
+    config = load_config(config_path)
+
+    pipeline = BenchmarkPipeline(config, workspace=tmp_path)
+
+    outputs = pipeline.pilot(include_baselines=True)
+
+    expected_labels = {"pilot_base", "pilot_minifold_12l", "pilot_minifold_48l"}
+    observed_labels = {Path(args[0]).parent.name for args in fake_predict.calls}
+    assert len(fake_predict.calls) == 3
+    assert expected_labels == observed_labels
+
+    assert outputs["minifold_base"].exists()
+    assert outputs["minifold_baseline_minifold_12l"].exists()
+    assert outputs["minifold_baseline_minifold_48l"].exists()
+
+    call_map = {Path(args[0]).parent.name: args for args in fake_predict.calls}
+
+    model_sizes = {
+        args[args.index("--model_size") + 1]
+        for args in call_map.values()
+        if "--model_size" in args
+    }
+    assert "12L" in model_sizes
+    assert "48L" in model_sizes
+
+    checkpoint_12l = call_map["pilot_minifold_12l"][call_map["pilot_minifold_12l"].index("--checkpoint") + 1]
+    checkpoint_48l = call_map["pilot_minifold_48l"][call_map["pilot_minifold_48l"].index("--checkpoint") + 1]
+
+    assert checkpoint_12l == "/var/tmp/checkpoints/minifold_12L.ckpt"
+    assert checkpoint_48l == "/var/tmp/checkpoints/minifold_48L.ckpt"
+
+
+def test_pilot_pipeline_runs_optional_minifold_variants(tmp_path: Path, fake_predict: _FakePredictMain) -> None:
+    config_path = Path(__file__).resolve().parents[1] / "hypothesis_test" / "example_config.json"
+    config = load_config(config_path)
+
+    pipeline = BenchmarkPipeline(config, workspace=tmp_path)
+
+    outputs = pipeline.pilot(include_faplm=True, include_ism=True, include_saesm2=True)
+
+    expected_labels = {"pilot_base", "pilot_faplm", "pilot_ism", "pilot_saesm2"}
+    observed_labels = {Path(args[0]).parent.name for args in fake_predict.calls}
+    assert len(fake_predict.calls) == 4
+    assert expected_labels == observed_labels
+
+    assert outputs["minifold_base"].exists()
+    assert outputs["minifold_faplm"].exists()
+    assert outputs["minifold_ism"].exists()
+    assert outputs["minifold_saesm2"].exists()
+
+    call_map = {Path(args[0]).parent.name: args for args in fake_predict.calls}
+
+    model_sizes = {
+        args[args.index("--model_size") + 1]
+        for args in call_map.values()
+        if "--model_size" in args
+    }
+    assert "12L" in model_sizes
+
+    for label in expected_labels:
+        args = call_map[label]
+        assert "--checkpoint" in args
+        assert args[args.index("--checkpoint") + 1] == "/var/tmp/checkpoints/minifold_12L.ckpt"
 
 def test_structure_module_forward_shapes(patched_autocast, monkeypatch: pytest.MonkeyPatch) -> None:
     import torch
@@ -384,3 +457,68 @@ def test_saesm_wrapper_matches_dummy_hidden_states() -> None:
         wrapper.num_layers,
         model.config.num_attention_heads,
     )
+
+
+def test_minifold_predict_runs_on_gpu(tmp_path: Path) -> None:
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA-enabled device required for integration test")
+
+    torch.cuda.reset_peak_memory_stats()
+
+    os.environ.setdefault("HF_HOME", "/var/tmp/hf_cache")
+    os.environ.setdefault("TRANSFORMERS_CACHE", "/var/tmp/hf_cache")
+
+    fasta_path = tmp_path / "gpu_probe.fasta"
+    fasta_path.write_text(
+        ">gpu_probe\n" "MQDRVKRPMNAFIVWSRDQRRKMALENPRMRNSEISKQLGYQWKMLTEAE\n",
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "predictions"
+    cache_dir = tmp_path / "cache"
+
+    from predict import predict as predict_command
+
+    args = [
+        str(fasta_path),
+        "--out_dir",
+        str(out_dir),
+        "--cache",
+        str(cache_dir),
+        "--checkpoint",
+        "/var/tmp/checkpoints/minifold_12L.ckpt",
+        "--model_size",
+        "12L",
+        "--token_per_batch",
+        "256",
+    ]
+
+    predict_command.main(args=args, standalone_mode=False)
+
+    result_dir = out_dir / f"minifold_results_{fasta_path.stem}"
+    pdb_files = list(result_dir.glob("*.pdb"))
+    assert pdb_files, "Expected PDB outputs from GPU-backed Minifold run"
+
+    pdb_path = pdb_files[0]
+    plddts = []
+    with pdb_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("ATOM ") and len(line) >= 66:
+                try:
+                    plddts.append(float(line[60:66]))
+                except ValueError:
+                    continue
+
+    assert plddts, "No pLDDT values parsed from Minifold PDB output"
+    mean_plddt = statistics.fmean(plddts)
+    min_plddt = min(plddts)
+    max_plddt = max(plddts)
+    print(
+        "Model loaded; test pLDDT was "
+        f"mean={mean_plddt:.2f}, min={min_plddt:.2f}, max={max_plddt:.2f}"
+    )
+
+    peak_memory = torch.cuda.max_memory_allocated()
+    assert peak_memory > 0, "Minifold run did not allocate GPU memory"

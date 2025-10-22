@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Union
 import json
 
+CACHE_ROOT = Path("/var/tmp/checkpoints")
+
 
 def _clean_sequence(value: str, identifier: str) -> str:
     sequence = value.replace("\n", "").replace(" ", "").strip().upper()
@@ -164,6 +166,7 @@ class BenchmarkConfig:
     minifold_faplm: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     minifold_ism: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
     minifold_saesm2: MinifoldRunSettings = field(default_factory=MinifoldRunSettings)
+    minifold_baselines: Dict[str, MinifoldRunSettings] = field(default_factory=dict)
     esmfold: BaselineSettings = field(default_factory=BaselineSettings)
     boltz2: BaselineSettings = field(default_factory=BaselineSettings)
     alphafold2: BaselineSettings = field(default_factory=BaselineSettings)
@@ -202,6 +205,17 @@ def _parse_targets(raw_targets: Iterable[Dict[str, object]], base_dir: Optional[
     return targets
 
 
+def _normalise_minifold_payload(payload: Dict[str, object], base_dir: Path) -> Dict[str, object]:
+    result = dict(payload)
+    checkpoint_value = result.get("checkpoint")
+    if checkpoint_value:
+        checkpoint_path = Path(str(checkpoint_value))
+        if not checkpoint_path.is_absolute():
+            checkpoint_path = (base_dir / checkpoint_path).resolve()
+        result["checkpoint"] = checkpoint_path
+    return result
+
+
 def load_config(path: Path) -> BenchmarkConfig:
     """Load a :class:`BenchmarkConfig` from a JSON file."""
 
@@ -229,14 +243,36 @@ def load_config(path: Path) -> BenchmarkConfig:
     raw_targets.extend(data.get("targets", []))
 
     targets = _parse_targets(raw_targets, base_dir)
-    output_dir = Path(data.get("output_dir", "./benchmark_outputs"))
-    cache_dir = Path(data.get("cache_dir", "./benchmark_cache"))
+    output_dir_value = data.get("output_dir", "./benchmark_outputs")
+    output_dir = Path(output_dir_value)
+    if not output_dir.is_absolute():
+        output_dir = (base_dir / output_dir).resolve()
 
-    minifold_base = MinifoldRunSettings(**data.get("minifold_base", {}))
-    minifold_templates = MinifoldRunSettings(**data.get("minifold_templates", {}))
-    minifold_faplm = MinifoldRunSettings(**data.get("minifold_faplm", {}))
-    minifold_ism = MinifoldRunSettings(**data.get("minifold_ism", {}))
-    minifold_saesm2 = MinifoldRunSettings(**data.get("minifold_saesm2", {}))
+    raw_cache_dir = data.get("cache_dir")
+    cache_dir = CACHE_ROOT if raw_cache_dir is None else Path(raw_cache_dir)
+    if not cache_dir.is_absolute():
+        cache_dir = CACHE_ROOT
+
+    minifold_base = MinifoldRunSettings(
+        **_normalise_minifold_payload(data.get("minifold_base", {}), base_dir)
+    )
+    minifold_templates = MinifoldRunSettings(
+        **_normalise_minifold_payload(data.get("minifold_templates", {}), base_dir)
+    )
+    minifold_faplm = MinifoldRunSettings(
+        **_normalise_minifold_payload(data.get("minifold_faplm", {}), base_dir)
+    )
+    minifold_ism = MinifoldRunSettings(
+        **_normalise_minifold_payload(data.get("minifold_ism", {}), base_dir)
+    )
+    minifold_saesm2 = MinifoldRunSettings(
+        **_normalise_minifold_payload(data.get("minifold_saesm2", {}), base_dir)
+    )
+    minifold_baselines_data = data.get("minifold_baselines", {})
+    minifold_baselines: Dict[str, MinifoldRunSettings] = {}
+    for name, payload in minifold_baselines_data.items():
+        normalised = _normalise_minifold_payload(payload, base_dir)
+        minifold_baselines[name] = MinifoldRunSettings(**normalised)
     esmfold = BaselineSettings(**data.get("esmfold", {}))
     boltz2 = BaselineSettings(**data.get("boltz2", {}))
     alphafold2 = BaselineSettings(**data.get("alphafold2", {}))
@@ -258,6 +294,7 @@ def load_config(path: Path) -> BenchmarkConfig:
         minifold_faplm=minifold_faplm,
         minifold_ism=minifold_ism,
         minifold_saesm2=minifold_saesm2,
+        minifold_baselines=minifold_baselines,
         esmfold=esmfold,
         boltz2=boltz2,
         alphafold2=alphafold2,

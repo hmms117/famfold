@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Sequence
 
@@ -14,6 +15,10 @@ from minifold.utils.saesm import SaESMEmbeddings, SaESMTrunk, resolve_saesm_chec
 from .config import SequenceTrunkSettings, TargetConfig
 
 LOGGER = logging.getLogger(__name__)
+
+_HF_CACHE_ROOT = "/var/tmp/hf_cache"
+os.environ["HF_HOME"] = _HF_CACHE_ROOT
+os.environ["TRANSFORMERS_CACHE"] = _HF_CACHE_ROOT
 
 
 def _resolve_dtype(value: Optional[str]) -> str | torch.dtype:

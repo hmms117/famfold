@@ -3,6 +3,8 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, Optional
 
+import logging
+
 import click
 import torch
 
@@ -27,6 +29,14 @@ MODEL_URL_48L = (
 MODEL_URL_12L = (
     "https://huggingface.co/jwohlwend/minifold/resolve/main/minifold_12L_final.ckpt"
 )
+
+_HF_CACHE_ROOT = "/var/tmp/hf_cache"
+os.environ["HF_HOME"] = _HF_CACHE_ROOT
+os.environ["TRANSFORMERS_CACHE"] = _HF_CACHE_ROOT
+
+LOGGER = logging.getLogger(__name__)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
 
 
 def download(cache: Path, model_size: str) -> None:
@@ -106,6 +116,13 @@ def create_model(checkpoint, device, compile=False, kernels=False):
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
     state_dict = {k.replace("model.", ""): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict, strict=False)
+    LOGGER.info(
+        "Model loaded: checkpoint=%s | esm_backbone=%s | compile=%s | kernels=%s",
+        checkpoint,
+        hparams.get("esm_model_name", "unknown"),
+        bool(compile),
+        bool(kernels),
+    )
 
     # Compile folding block
     if compile:
