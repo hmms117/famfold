@@ -1,0 +1,30 @@
+# Training configuration for MiniFold on AFESM representatives.
+task: minifold
+
+data:
+  data_dir: /var/tmp/famfold/afesm/cifs
+  esm_model_name: facebook/esm2_t36_3B_UR50D
+  esm_cache_path: /var/tmp/checkpoints
+  batch_size: 1
+  num_workers: 8
+  samples_per_epoch: 1000000
+  max_length: 256
+  train_ids: /var/tmp/famfold/afesm/splits/reps/train.txt
+  val_ids: /var/tmp/famfold/afesm/splits/reps/val.txt
+
+model:
+  esm_model_name: facebook/esm2_t36_3B_UR50D
+  num_blocks: 48
+  num_recycling: 0
+  max_dist: 25
+  no_bins: 64
+  compile: false
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  precision: bf16-mixed
+  gradient_clip_val: 1.5
+  val_check_interval: 0.25
+  accumulate_grad_batches: 4
+  default_root_dir: /var/tmp/famfold/afesm/checkpoints
